@@ -1,0 +1,7 @@
+opencv-python
+numpy
+mss
+plyer
+pystray
+pillow
+winotify

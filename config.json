@@ -1,0 +1,11 @@
+{
+  "roi_left": 150,
+  "roi_top": 150,
+  "roi_width": 500,
+  "roi_height": 160,
+  "threshold": 0.82,
+  "hysteresis": 0.08,
+  "scan_interval": 0.2,
+  "cooldown_sec": 2.0,
+  "mode": "both"
+}
