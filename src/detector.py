@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -18,9 +18,6 @@ from roi import RoiPx, rel_to_px
 # 中文路径兼容：cv2.imdecode
 # -------------------------
 def load_gray_compat(path: str) -> np.ndarray:
-    """
-    Load image as grayscale with Chinese path compatibility.
-    """
     with open(path, "rb") as f:
         data = f.read()
     arr = np.frombuffer(data, dtype=np.uint8)
@@ -33,9 +30,12 @@ def load_gray_compat(path: str) -> np.ndarray:
 @dataclass
 class DetectorConfig:
     threshold: float = 0.82
+    # 重新武装阈值：必须跌破这个值，才允许下一次触发
+    # 建议 0.10~0.20
+    hysteresis: float = 0.12
+
     scan_interval_sec: float = 0.20
     cooldown_sec: float = 3.0
-    # match method: TM_CCOEFF_NORMED is a good default for UI templates
     match_method: int = cv2.TM_CCOEFF_NORMED
 
 
@@ -48,13 +48,9 @@ class MatchResult:
 
 class Detector:
     """
-    Minimal viable multi-profile detector.
-
-    Responsibilities:
-    - Keep current GameProfile
-    - Load templates for that profile
-    - Each loop: ROI from profile -> screenshot -> best match among templates
-    - Trigger callback when best score >= threshold and cooldown passed
+    Multi-profile detector with:
+    - cooldown
+    - edge trigger (armed / disarmed) using hysteresis
     """
 
     def __init__(
@@ -72,11 +68,13 @@ class Detector:
         self._stop_evt = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
-        # loaded template grayscale cache: (template_id -> (label, gray_img))
         self._tpls: Dict[str, Tuple[str, np.ndarray]] = {}
         self.reload_templates()
 
         self._last_fire_ts = 0.0
+
+        # 关键状态：同一张结算界面只触发一次
+        self._armed = True
 
     # -------------------------
     # Public controls
@@ -98,6 +96,8 @@ class Detector:
         with self._profile_lock:
             self._profile = profile
         self.reload_templates()
+        # 切换游戏时重新武装
+        self._armed = True
 
     def get_profile(self) -> GameProfile:
         with self._profile_lock:
@@ -116,9 +116,6 @@ class Detector:
     # Internal loop
     # -------------------------
     def _get_screen_size(self) -> Tuple[int, int]:
-        """
-        Get primary monitor size.
-        """
         with mss() as sct:
             mon = sct.monitors[1]  # primary
             return int(mon["width"]), int(mon["height"])
@@ -127,9 +124,7 @@ class Detector:
         with mss() as sct:
             monitor = {"left": roi.left, "top": roi.top, "width": roi.width, "height": roi.height}
             img = np.array(sct.grab(monitor))  # BGRA
-            # to BGR
-            bgr = img[:, :, :3]
-            return bgr
+            return img[:, :, :3]  # BGR
 
     def _best_match(self, roi_bgr: np.ndarray) -> Optional[MatchResult]:
         if not self._tpls:
@@ -139,7 +134,6 @@ class Detector:
 
         best: Optional[MatchResult] = None
         for tid, (label, templ_gray) in self._tpls.items():
-            # template must be <= roi
             th, tw = templ_gray.shape[:2]
             rh, rw = gray.shape[:2]
             if th > rh or tw > rw:
@@ -154,35 +148,42 @@ class Detector:
 
         return best
 
-    def _should_fire(self) -> bool:
-        now = time.time()
-        return (now - self._last_fire_ts) >= self.cfg.cooldown_sec
+    def _cooldown_ok(self) -> bool:
+        return (time.time() - self._last_fire_ts) >= self.cfg.cooldown_sec
 
     def _fire(self, result: MatchResult) -> None:
         self._last_fire_ts = time.time()
         try:
             self._on_match(result)
         except Exception:
-            # swallow callback errors to keep detector alive
             pass
 
     def _run(self) -> None:
-        # cache screen size to reduce overhead; refresh if needed in future
         screen_w, screen_h = self._get_screen_size()
+        reset_threshold = max(0.0, self.cfg.threshold - self.cfg.hysteresis)
 
         while not self._stop_evt.is_set():
             try:
                 profile = self.get_profile()
                 roi_px = rel_to_px(profile.roi_rel, screen_w, screen_h)
-
                 roi_bgr = self._grab_roi(roi_px)
                 best = self._best_match(roi_bgr)
 
-                if best and best.score >= self.cfg.threshold and self._should_fire():
-                    self._fire(best)
+                if best is None:
+                    # 匹配不到：重新武装
+                    self._armed = True
+                else:
+                    # 跌破 reset_threshold：重新武装（意味着结算界面离开/变化足够大）
+                    if best.score < reset_threshold:
+                        self._armed = True
 
-            except Exception:
-                # keep loop alive
-                pass
+                    # 达到 threshold 且 armed 且 cooldown：触发一次并解除武装
+                    if self._armed and best.score >= self.cfg.threshold and self._cooldown_ok():
+                        self._fire(best)
+                        self._armed = False
+
+            except Exception as e:
+                # 调试版可看到错误；-w 时不会显示
+                print("Detector loop error:", repr(e))
 
             time.sleep(self.cfg.scan_interval_sec)

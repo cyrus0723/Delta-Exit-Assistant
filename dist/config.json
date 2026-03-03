@@ -1,3 +1,10 @@
 {
-  "selected_profile_id": "delta"
+  "selected_profile_id": "delta",
+  "threshold": 0.82,
+  "hysteresis": 0.12,
+  "scan_interval_sec": 0.2,
+  "cooldown_sec": 3.0,
+  "title_tpl": "{game} 结算检测",
+  "msg_tpl": "打完这把就下播哦!",
+  "notify_mode": "both"
 }
