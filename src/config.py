@@ -1,0 +1,1 @@
+# 新：读写 config.json（selected_profile_id / mode / threshold 等）

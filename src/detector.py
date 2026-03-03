@@ -1,199 +1,188 @@
 # src/detector.py
-import sys
-import time
+from __future__ import annotations
+
 import threading
+import time
 from dataclasses import dataclass
-from enum import Enum
-from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 from mss import mss
 
+from profiles import GameProfile, resolve_resource_path
+from roi import RoiPx, rel_to_px
 
-class NotifyMode(str, Enum):
-    BOTH = "both"       # 成功+失败都提醒
-    SUCCESS = "success" # 只提醒成功
-    FAIL = "fail"       # 只提醒失败
+
+# -------------------------
+# 中文路径兼容：cv2.imdecode
+# -------------------------
+def load_gray_compat(path: str) -> np.ndarray:
+    """
+    Load image as grayscale with Chinese path compatibility.
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+    arr = np.frombuffer(data, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError(f"Failed to load image: {path}")
+    return img
 
 
 @dataclass
 class DetectorConfig:
-    roi_left: int = 150
-    roi_top: int = 150
-    roi_width: int = 500
-    roi_height: int = 160
-
     threshold: float = 0.82
-    hysteresis: float = 0.08
-    scan_interval: float = 0.20
-
-    # 提醒冷却（建议 6~12 秒，避免结算页动画导致重复触发）
-    cooldown_sec: float = 8.0
-
-    mode: NotifyMode = NotifyMode.BOTH
+    scan_interval_sec: float = 0.20
+    cooldown_sec: float = 3.0
+    # match method: TM_CCOEFF_NORMED is a good default for UI templates
+    match_method: int = cv2.TM_CCOEFF_NORMED
 
 
-def _resource_base_dir() -> Path:
+@dataclass
+class MatchResult:
+    label: str
+    template_id: str
+    score: float
+
+
+class Detector:
     """
-    资源目录：开发 / PyInstaller onefile / onedir 兼容（只读）
-    """
-    if getattr(sys, "frozen", False):
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            return Path(meipass)
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
+    Minimal viable multi-profile detector.
 
-
-def assets_dir() -> Path:
-    return _resource_base_dir() / "assets"
-
-
-def templates_dir() -> Path:
-    return assets_dir() / "templates"
-
-
-def grab_roi(sct: mss, roi: dict) -> np.ndarray:
-    shot = sct.grab(roi)
-    frame = np.array(shot)[:, :, :3]  # BGRA -> BGR
-    return frame
-
-
-def preprocess(img_bgr: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    return gray
-
-
-def load_gray(path: Path) -> np.ndarray:
-    """
-    兼容中文路径：np.fromfile + cv2.imdecode
-    """
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"模板不存在：{p}")
-
-    data = np.fromfile(str(p), dtype=np.uint8)
-    img = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
-
-    if img is None:
-        raise FileNotFoundError(f"读不到模板（可能损坏/格式不支持）：{p}")
-    return img
-
-
-def match_score(screen_gray: np.ndarray, templ_gray: np.ndarray) -> float:
-    res = cv2.matchTemplate(screen_gray, templ_gray, cv2.TM_CCOEFF_NORMED)
-    return float(res.max())
-
-
-class DeltaResultDetector:
-    """
-    后台线程检测器：
-    - 边沿触发：进入结算页只触发一次
-    - 回滞：离开结算页才允许下一次触发
-    - 冷却：避免结算动画导致短时间重复提醒
+    Responsibilities:
+    - Keep current GameProfile
+    - Load templates for that profile
+    - Each loop: ROI from profile -> screenshot -> best match among templates
+    - Trigger callback when best score >= threshold and cooldown passed
     """
 
     def __init__(
         self,
-        config: DetectorConfig,
-        on_result: Callable[[str, float], None],
-        on_status: Optional[Callable[[str], None]] = None,
+        cfg: DetectorConfig,
+        profile: GameProfile,
+        on_match: Callable[[MatchResult], None],
     ):
-        self.config = config
-        self.on_result = on_result
-        self.on_status = on_status or (lambda _: None)
+        self.cfg = cfg
+        self._profile_lock = threading.Lock()
+        self._profile: GameProfile = profile
+
+        self._on_match = on_match
 
         self._stop_evt = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
-        self._templ_win: Optional[np.ndarray] = None
-        self._templ_lose: Optional[np.ndarray] = None
+        # loaded template grayscale cache: (template_id -> (label, gray_img))
+        self._tpls: Dict[str, Tuple[str, np.ndarray]] = {}
+        self.reload_templates()
 
-        self._in_result_screen = False
-        self._last_notify_ts = 0.0
+        self._last_fire_ts = 0.0
 
-    def _roi_dict(self) -> dict:
-        return {
-            "left": self.config.roi_left,
-            "top": self.config.roi_top,
-            "width": self.config.roi_width,
-            "height": self.config.roi_height,
-        }
-
-    def reload_templates(self) -> Tuple[Path, Path]:
-        t_win = templates_dir() / "success.png"
-        t_lose = templates_dir() / "fail.png"
-        self._templ_win = load_gray(t_win)
-        self._templ_lose = load_gray(t_lose)
-        self.on_status("模板加载成功")
-        return t_win, t_lose
-
+    # -------------------------
+    # Public controls
+    # -------------------------
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
-
-        self.reload_templates()
         self._stop_evt.clear()
-        self._thread = threading.Thread(target=self._run, name="detector", daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-        self.on_status("检测已启动")
 
     def stop(self) -> None:
         self._stop_evt.set()
-        self.on_status("检测已停止")
 
     def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
+        return bool(self._thread and self._thread.is_alive() and not self._stop_evt.is_set())
 
-    def set_mode(self, mode: NotifyMode) -> None:
-        self.config.mode = mode
-        self.on_status(f"提醒模式：{mode.value}")
+    def set_profile(self, profile: GameProfile) -> None:
+        with self._profile_lock:
+            self._profile = profile
+        self.reload_templates()
 
-    def _should_notify_for_result(self, result: str) -> bool:
-        if self.config.mode == NotifyMode.BOTH:
-            return True
-        if self.config.mode == NotifyMode.SUCCESS:
-            return result == "撤离成功"
-        if self.config.mode == NotifyMode.FAIL:
-            return result == "撤离失败"
-        return True
+    def get_profile(self) -> GameProfile:
+        with self._profile_lock:
+            return self._profile
 
-    def _cooldown_ok(self) -> bool:
-        return (time.time() - self._last_notify_ts) >= max(0.0, self.config.cooldown_sec)
+    def reload_templates(self) -> None:
+        profile = self.get_profile()
+        new_tpls: Dict[str, Tuple[str, np.ndarray]] = {}
+        for t in profile.templates:
+            abs_path = resolve_resource_path(t.path)
+            gray = load_gray_compat(abs_path)
+            new_tpls[t.id] = (t.label, gray)
+        self._tpls = new_tpls
 
-    def _mark_notified(self) -> None:
-        self._last_notify_ts = time.time()
+    # -------------------------
+    # Internal loop
+    # -------------------------
+    def _get_screen_size(self) -> Tuple[int, int]:
+        """
+        Get primary monitor size.
+        """
+        with mss() as sct:
+            mon = sct.monitors[1]  # primary
+            return int(mon["width"]), int(mon["height"])
+
+    def _grab_roi(self, roi: RoiPx) -> np.ndarray:
+        with mss() as sct:
+            monitor = {"left": roi.left, "top": roi.top, "width": roi.width, "height": roi.height}
+            img = np.array(sct.grab(monitor))  # BGRA
+            # to BGR
+            bgr = img[:, :, :3]
+            return bgr
+
+    def _best_match(self, roi_bgr: np.ndarray) -> Optional[MatchResult]:
+        if not self._tpls:
+            return None
+
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+
+        best: Optional[MatchResult] = None
+        for tid, (label, templ_gray) in self._tpls.items():
+            # template must be <= roi
+            th, tw = templ_gray.shape[:2]
+            rh, rw = gray.shape[:2]
+            if th > rh or tw > rw:
+                continue
+
+            res = cv2.matchTemplate(gray, templ_gray, self.cfg.match_method)
+            _, max_val, _, _ = cv2.minMaxLoc(res)
+            score = float(max_val)
+
+            if best is None or score > best.score:
+                best = MatchResult(label=label, template_id=tid, score=score)
+
+        return best
+
+    def _should_fire(self) -> bool:
+        now = time.time()
+        return (now - self._last_fire_ts) >= self.cfg.cooldown_sec
+
+    def _fire(self, result: MatchResult) -> None:
+        self._last_fire_ts = time.time()
+        try:
+            self._on_match(result)
+        except Exception:
+            # swallow callback errors to keep detector alive
+            pass
 
     def _run(self) -> None:
-        roi = self._roi_dict()
+        # cache screen size to reduce overhead; refresh if needed in future
+        screen_w, screen_h = self._get_screen_size()
 
-        if self._templ_win is None or self._templ_lose is None:
-            self.on_status("模板未加载，停止检测")
-            return
+        while not self._stop_evt.is_set():
+            try:
+                profile = self.get_profile()
+                roi_px = rel_to_px(profile.roi_rel, screen_w, screen_h)
 
-        with mss() as sct:
-            while not self._stop_evt.is_set():
-                frame = grab_roi(sct, roi)
-                gray = preprocess(frame)
+                roi_bgr = self._grab_roi(roi_px)
+                best = self._best_match(roi_bgr)
 
-                s_win = match_score(gray, self._templ_win)
-                s_lose = match_score(gray, self._templ_lose)
-                best = max(s_win, s_lose)
+                if best and best.score >= self.cfg.threshold and self._should_fire():
+                    self._fire(best)
 
-                # 进入结算：边沿触发
-                if best >= self.config.threshold and not self._in_result_screen:
-                    result = "撤离成功" if s_win >= s_lose else "撤离失败"
-                    self._in_result_screen = True
+            except Exception:
+                # keep loop alive
+                pass
 
-                    if self._should_notify_for_result(result) and self._cooldown_ok():
-                        self.on_result(result, best)
-                        self._mark_notified()
-
-                # 离开结算：回滞
-                elif self._in_result_screen and best < (self.config.threshold - self.config.hysteresis):
-                    self._in_result_screen = False
-
-                time.sleep(self.config.scan_interval)
+            time.sleep(self.cfg.scan_interval_sec)
