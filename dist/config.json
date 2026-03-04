@@ -5,6 +5,6 @@
   "scan_interval_sec": 0.2,
   "cooldown_sec": 3.0,
   "title_tpl": "{game} 结算检测",
-  "msg_tpl": "打完这把就下播哦!",
+  "msg_tpl": "{label}（score={score:.3f}）",
   "notify_mode": "both"
 }
