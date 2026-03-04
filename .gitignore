@@ -1,0 +1,18 @@
+# PyInstaller
+/build/
+/dist/
+*.spec
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# venv
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
