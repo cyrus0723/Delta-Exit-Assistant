@@ -4,39 +4,13 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from mss import mss
 
-from profiles import GameProfile, resolve_resource_path
-from roi import RoiPx, rel_to_px
-
-
-# -------------------------
-# 中文路径兼容：cv2.imdecode
-# -------------------------
-def load_gray_compat(path: str) -> np.ndarray:
-    with open(path, "rb") as f:
-        data = f.read()
-    arr = np.frombuffer(data, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise FileNotFoundError(f"Failed to load image: {path}")
-    return img
-
-
-@dataclass
-class DetectorConfig:
-    threshold: float = 0.82
-    # 重新武装阈值：必须跌破这个值，才允许下一次触发
-    # 建议 0.10~0.20
-    hysteresis: float = 0.12
-
-    scan_interval_sec: float = 0.20
-    cooldown_sec: float = 3.0
-    match_method: int = cv2.TM_CCOEFF_NORMED
+from capture import grab_profile_roi_bgr
+from profiles import GameProfile, TemplateItem, resolve_path
 
 
 @dataclass
@@ -46,144 +20,133 @@ class MatchResult:
     score: float
 
 
+@dataclass
+class DetectorConfig:
+    threshold: float = 0.82
+    hysteresis: float = 0.12
+    scan_interval_sec: float = 0.20
+    cooldown_sec: float = 3.0
+
+
+@dataclass
+class _LoadedTemplate:
+    template_id: str
+    label: str
+    path: str
+    gray: np.ndarray
+
+
 class Detector:
-    """
-    Multi-profile detector with:
-    - cooldown
-    - edge trigger (armed / disarmed) using hysteresis
-    """
-
-    def __init__(
-        self,
-        cfg: DetectorConfig,
-        profile: GameProfile,
-        on_match: Callable[[MatchResult], None],
-    ):
+    def __init__(self, cfg: DetectorConfig, profile: GameProfile, on_match: Callable[[MatchResult], None]):
         self.cfg = cfg
-        self._profile_lock = threading.Lock()
-        self._profile: GameProfile = profile
-
+        self._profile = profile
         self._on_match = on_match
 
-        self._stop_evt = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._running = False
+        self._th: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
 
-        self._tpls: Dict[str, Tuple[str, np.ndarray]] = {}
-        self.reload_templates()
+        self._templates: List[_LoadedTemplate] = []
+        self._reload_templates_locked()
 
+        # anti-spam
+        self._armed = True
         self._last_fire_ts = 0.0
 
-        # 关键状态：同一张结算界面只触发一次
-        self._armed = True
-
-    # -------------------------
-    # Public controls
-    # -------------------------
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop_evt.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop_evt.set()
-
     def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive() and not self._stop_evt.is_set())
+        return self._running
 
     def set_profile(self, profile: GameProfile) -> None:
-        with self._profile_lock:
+        with self._lock:
             self._profile = profile
-        self.reload_templates()
-        # 切换游戏时重新武装
-        self._armed = True
+            self._reload_templates_locked()
+            self._armed = True
+            self._last_fire_ts = 0.0
 
-    def get_profile(self) -> GameProfile:
-        with self._profile_lock:
-            return self._profile
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._th = threading.Thread(target=self._loop, daemon=True)
+        self._th.start()
+
+    def stop(self) -> None:
+        self._running = False
 
     def reload_templates(self) -> None:
-        profile = self.get_profile()
-        new_tpls: Dict[str, Tuple[str, np.ndarray]] = {}
-        for t in profile.templates:
-            abs_path = resolve_resource_path(t.path)
-            gray = load_gray_compat(abs_path)
-            new_tpls[t.id] = (t.label, gray)
-        self._tpls = new_tpls
+        with self._lock:
+            self._reload_templates_locked()
 
-    # -------------------------
-    # Internal loop
-    # -------------------------
-    def _get_screen_size(self) -> Tuple[int, int]:
-        with mss() as sct:
-            mon = sct.monitors[1]  # primary
-            return int(mon["width"]), int(mon["height"])
-
-    def _grab_roi(self, roi: RoiPx) -> np.ndarray:
-        with mss() as sct:
-            monitor = {"left": roi.left, "top": roi.top, "width": roi.width, "height": roi.height}
-            img = np.array(sct.grab(monitor))  # BGRA
-            return img[:, :, :3]  # BGR
-
-    def _best_match(self, roi_bgr: np.ndarray) -> Optional[MatchResult]:
-        if not self._tpls:
-            return None
-
-        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-
-        best: Optional[MatchResult] = None
-        for tid, (label, templ_gray) in self._tpls.items():
-            th, tw = templ_gray.shape[:2]
-            rh, rw = gray.shape[:2]
-            if th > rh or tw > rw:
+    def _reload_templates_locked(self) -> None:
+        self._templates = []
+        for t in self._profile.templates:
+            p = resolve_path(t.path)
+            try:
+                img = cv2.imdecode(np.fromfile(p, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                self._templates.append(_LoadedTemplate(template_id=t.id, label=t.label, path=p, gray=gray))
+            except FileNotFoundError:
+                # missing template is OK (e.g. draw.png not captured yet)
+                continue
+            except Exception:
                 continue
 
-            res = cv2.matchTemplate(gray, templ_gray, self.cfg.match_method)
+    def _best_match(self, roi_bgr: np.ndarray) -> Optional[MatchResult]:
+        if not self._templates:
+            return None
+
+        roi_gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+
+        best: Optional[Tuple[str, str, float]] = None  # (id, label, score)
+        for t in self._templates:
+            if roi_gray.shape[0] < t.gray.shape[0] or roi_gray.shape[1] < t.gray.shape[1]:
+                continue
+            res = cv2.matchTemplate(roi_gray, t.gray, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv2.minMaxLoc(res)
-            score = float(max_val)
+            if best is None or max_val > best[2]:
+                best = (t.template_id, t.label, float(max_val))
 
-            if best is None or score > best.score:
-                best = MatchResult(label=label, template_id=tid, score=score)
+        if best is None:
+            return None
+        return MatchResult(label=best[1], template_id=best[0], score=best[2])
 
-        return best
+    def _loop(self) -> None:
+        while self._running:
+            time.sleep(max(0.05, float(self.cfg.scan_interval_sec)))
 
-    def _cooldown_ok(self) -> bool:
-        return (time.time() - self._last_fire_ts) >= self.cfg.cooldown_sec
+            with self._lock:
+                profile = self._profile
+                templates_count = len(self._templates)
 
-    def _fire(self, result: MatchResult) -> None:
-        self._last_fire_ts = time.time()
-        try:
-            self._on_match(result)
-        except Exception:
-            pass
+            if templates_count == 0:
+                continue
 
-    def _run(self) -> None:
-        screen_w, screen_h = self._get_screen_size()
-        reset_threshold = max(0.0, self.cfg.threshold - self.cfg.hysteresis)
-
-        while not self._stop_evt.is_set():
             try:
-                profile = self.get_profile()
-                roi_px = rel_to_px(profile.roi_rel, screen_w, screen_h)
-                roi_bgr = self._grab_roi(roi_px)
-                best = self._best_match(roi_bgr)
+                roi = grab_profile_roi_bgr(profile)
+            except Exception:
+                continue
 
-                if best is None:
-                    # 匹配不到：重新武装
+            r = self._best_match(roi)
+            if r is None:
+                continue
+
+            now = time.time()
+
+            # cooldown gate
+            if now - self._last_fire_ts < float(self.cfg.cooldown_sec):
+                continue
+
+            if self._armed:
+                if r.score >= float(self.cfg.threshold):
+                    self._last_fire_ts = now
+                    self._armed = False
+                    try:
+                        self._on_match(r)
+                    except Exception:
+                        pass
+            else:
+                # re-arm when score drops below threshold - hysteresis
+                if r.score < float(self.cfg.threshold) - float(self.cfg.hysteresis):
                     self._armed = True
-                else:
-                    # 跌破 reset_threshold：重新武装（意味着结算界面离开/变化足够大）
-                    if best.score < reset_threshold:
-                        self._armed = True
-
-                    # 达到 threshold 且 armed 且 cooldown：触发一次并解除武装
-                    if self._armed and best.score >= self.cfg.threshold and self._cooldown_ok():
-                        self._fire(best)
-                        self._armed = False
-
-            except Exception as e:
-                # 调试版可看到错误；-w 时不会显示
-                print("Detector loop error:", repr(e))
-
-            time.sleep(self.cfg.scan_interval_sec)

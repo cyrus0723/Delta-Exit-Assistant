@@ -8,7 +8,7 @@ import winsound
 from winotify import Notification, audio
 
 from detector import MatchResult
-from profiles import GameProfile, resolve_resource_path
+from profiles import GameProfile, resolve_path
 
 
 VALID_NOTIFY_MODES = {"both", "toast", "sound"}
@@ -47,7 +47,7 @@ class Notifier:
             app_id=self.app_name,
             title=title,
             msg=msg,
-            icon=resolve_resource_path("assets/icon.ico"),
+            icon=resolve_path("assets/icon.ico"),  # ✅外置 assets
         )
         toast.set_audio(audio.Default, loop=False)
         toast.show()

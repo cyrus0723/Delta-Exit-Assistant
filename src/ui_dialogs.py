@@ -18,12 +18,6 @@ class _TkJob:
 
 
 class TkDialogService:
-    """
-    Run tkinter mainloop in a dedicated thread.
-    pystray menu callbacks are not guaranteed to be on main thread,
-    so all tkinter dialogs MUST be executed on tkinter thread.
-    """
-
     def __init__(self) -> None:
         self._q: "queue.Queue[_TkJob]" = queue.Queue()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -55,36 +49,26 @@ class TkDialogService:
         self._root.after(50, poll)
         self._root.mainloop()
 
-    def _call(self, fn: Callable[[], Any], timeout: float = 120.0) -> Any:
+    def _call(self, fn: Callable[[], Any], timeout: float = 60.0) -> Any:
         job = _TkJob(fn=fn, done=threading.Event(), out={})
         self._q.put(job)
         job.done.wait(timeout=timeout)
         return job.out.get("value", None)
 
-    def info(self, title: str, msg: str) -> None:
-        def _f():
-            messagebox.showinfo(title, msg, parent=self._root)
-            return None
+    def run_in_tk(self, fn: Callable[[tk.Tk], Any], timeout: float = 120.0) -> Any:
+        return self._call(lambda: fn(self._root), timeout=timeout)
 
-        self._call(_f)
+    def info(self, title: str, msg: str) -> None:
+        self._call(lambda: messagebox.showinfo(title, msg, parent=self._root))
 
     def confirm(self, title: str, msg: str) -> bool:
-        def _f():
-            return bool(messagebox.askyesno(title, msg, parent=self._root))
-
-        v = self._call(_f)
+        v = self._call(lambda: messagebox.askyesno(title, msg, parent=self._root))
         return bool(v)
 
     def ask_float(self, title: str, prompt: str, initial: float) -> Optional[float]:
-        def _f():
-            return simpledialog.askfloat(title, prompt, initialvalue=initial, parent=self._root)
-
-        v = self._call(_f)
+        v = self._call(lambda: simpledialog.askfloat(title, prompt, initialvalue=initial, parent=self._root))
         return None if v is None else float(v)
 
-    def ask_str(self, title: str, prompt: str, initial: str = "") -> Optional[str]:
-        def _f():
-            return simpledialog.askstring(title, prompt, initialvalue=initial, parent=self._root)
-
-        v = self._call(_f)
+    def ask_str(self, title: str, prompt: str, initial: str) -> Optional[str]:
+        v = self._call(lambda: simpledialog.askstring(title, prompt, initialvalue=initial, parent=self._root))
         return None if v is None else str(v)
