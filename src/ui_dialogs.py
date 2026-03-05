@@ -50,13 +50,12 @@ class TkDialogService:
                         job.done.set()
             except queue.Empty:
                 pass
-
             self._root.after(50, poll)
 
         self._root.after(50, poll)
         self._root.mainloop()
 
-    def _call(self, fn: Callable[[], Any], timeout: float = 60.0) -> Any:
+    def _call(self, fn: Callable[[], Any], timeout: float = 120.0) -> Any:
         job = _TkJob(fn=fn, done=threading.Event(), out={})
         self._q.put(job)
         job.done.wait(timeout=timeout)
@@ -69,6 +68,13 @@ class TkDialogService:
 
         self._call(_f)
 
+    def confirm(self, title: str, msg: str) -> bool:
+        def _f():
+            return bool(messagebox.askyesno(title, msg, parent=self._root))
+
+        v = self._call(_f)
+        return bool(v)
+
     def ask_float(self, title: str, prompt: str, initial: float) -> Optional[float]:
         def _f():
             return simpledialog.askfloat(title, prompt, initialvalue=initial, parent=self._root)
@@ -76,7 +82,7 @@ class TkDialogService:
         v = self._call(_f)
         return None if v is None else float(v)
 
-    def ask_str(self, title: str, prompt: str, initial: str) -> Optional[str]:
+    def ask_str(self, title: str, prompt: str, initial: str = "") -> Optional[str]:
         def _f():
             return simpledialog.askstring(title, prompt, initialvalue=initial, parent=self._root)
 
