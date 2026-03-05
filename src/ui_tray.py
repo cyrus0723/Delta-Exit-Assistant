@@ -19,6 +19,9 @@ from profiles import (
     load_profiles_from_assets,
     pick_profile,
     resolve_resource_path,
+    normalize_profile_id,
+    save_profile,
+    profile_file_path,
 )
 from ui_dialogs import TkDialogService
 from notify import Notifier, NotifySettings, VALID_NOTIFY_MODES
@@ -31,6 +34,8 @@ from roi_tuner import (
     save_roi_override,
     clear_roi_override,
 )
+from roi_selector import select_roi_fullscreen
+from roi import RoiRel
 
 APP_NAME = "Delta Exit Assistant"
 
@@ -105,20 +110,16 @@ class TrayApp:
         override = load_roi_override(self._cfg, base.id)
         if override is None:
             return base
-        # GameProfile is frozen dataclass in profiles.py, so use dataclasses.replace
         return replace(base, roi_rel=override)
 
     def _current_tuner(self) -> RoiTuner:
-        # operate on the currently effective roi (override or base)
         step = float(self._cfg.get("roi_step", 0.005) or 0.005)
         return RoiTuner(roi=self._profile.roi_rel, step=step)
 
     def _save_tuner(self, tuner: RoiTuner) -> None:
-        # save override to config for current profile id
         save_roi_override(self._cfg, self._profile_base.id, tuner.roi)
         self._cfg["roi_step"] = tuner.step
 
-        # refresh effective profile / detector / notifier
         self._profile = replace(self._profile_base, roi_rel=tuner.roi)
         self._detector.set_profile(self._profile)
         self._notifier.set_profile(self._profile)
@@ -185,13 +186,70 @@ class TrayApp:
                     break
 
             self._profile = self._apply_roi_override(self._profile_base)
-
             self._detector.set_profile(self._profile)
             self._notifier.set_profile(self._profile)
 
             self._persist()
             self._rebuild_menu()
         return _inner
+
+    # -------------------------
+    # New Game flow
+    # -------------------------
+    def _action_new_game(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        name = self._dlg.ask_str("新建游戏", "请输入游戏名称（例如：OW2 / Overwatch 2）", "")
+        if not name:
+            return
+
+        pid = normalize_profile_id(name)
+        # avoid collision: if exists, ask overwrite?
+        fp = profile_file_path(pid)
+        if fp.exists():
+            ok = self._dlg.confirm("已存在同名游戏", f"已存在 {pid}.json\n是否覆盖？（会覆盖该 profile 的 ROI/模板定义）")
+            if not ok:
+                return
+
+        self._dlg.info("选择 ROI", "接下来请在屏幕上拖拽框选『结算标题/结果文字』所在区域。\n按 Enter 确认，按 ESC 取消。")
+
+        roi_rel: RoiRel | None = self._dlg.run_in_tk(lambda root: select_roi_fullscreen(root, title=f"选择 ROI - {name}"))
+        if roi_rel is None:
+            return
+
+        # default templates (win/lose/draw reserved)
+        templates = [
+            TemplateItem(id=f"{pid}_win", label="胜利", path=f"assets/templates/{pid}/win.png"),
+            TemplateItem(id=f"{pid}_lose", label="败北", path=f"assets/templates/{pid}/lose.png"),
+            TemplateItem(id=f"{pid}_draw", label="平局", path=f"assets/templates/{pid}/draw.png"),
+        ]
+
+        profile = GameProfile(
+            id=pid,
+            display_name=str(name).strip(),
+            roi_rel=roi_rel,
+            templates=templates,
+        )
+
+        try:
+            out = save_profile(profile)
+        except Exception as e:
+            self._dlg.info("创建失败", repr(e))
+            return
+
+        # reload profiles list and switch to it
+        self._profiles = load_profiles_from_assets()
+        self._profile_base = pick_profile(self._profiles, pid)
+        self._profile = self._apply_roi_override(self._profile_base)
+
+        self._detector.set_profile(self._profile)
+        self._notifier.set_profile(self._profile)
+
+        self._persist()
+        self._rebuild_menu()
+
+        self._dlg.info(
+            "创建成功",
+            f"已创建：\n{out}\n\n下一步：进入结算界面，托盘右键 → 抓取模板 → 分别抓取『胜利/败北/平局』。",
+        )
 
     # -------------------------
     # Actions: tuning detector
@@ -290,7 +348,7 @@ class TrayApp:
         return _inner
 
     # -------------------------
-    # ROI tuner actions
+    # ROI tuner actions（保留）
     # -------------------------
     def _action_set_roi_step(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         cur = float(self._cfg.get("roi_step", 0.005) or 0.005)
@@ -304,14 +362,12 @@ class TrayApp:
     def _action_preview_roi(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         try:
             bgr = grab_profile_roi_bgr(self._profile)
-            # save to temp and open
             tmp = Path(tempfile.gettempdir()) / f"roi_preview_{self._profile_base.id}.png"
-            # reuse cv2.imencode for chinese path safety
             import cv2
             ok, buf = cv2.imencode(".png", bgr)
             if ok:
                 tmp.write_bytes(buf.tobytes())
-                os.startfile(str(tmp))  # Windows
+                os.startfile(str(tmp))
         except Exception as e:
             self._dlg.info("预览失败", repr(e))
 
@@ -344,7 +400,6 @@ class TrayApp:
         return _inner
 
     def _action_roi_reset(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        # clear override for this profile
         clear_roi_override(self._cfg, self._profile_base.id)
         self._profile = self._profile_base
         self._detector.set_profile(self._profile)
@@ -356,15 +411,20 @@ class TrayApp:
     # Build menu
     # -------------------------
     def _build_menu(self) -> pystray.Menu:
-        profile_items = [
-            pystray.MenuItem(
-                p.display_name,
-                self._action_select_profile(p.id),
-                checked=self._is_profile_selected(p.id),
-                radio=True,
-            )
-            for p in self._profiles
-        ]
+        # “选择游戏”菜单：第一项就是“新建游戏…”
+        profile_items = [pystray.MenuItem("新建游戏…", self._action_new_game)]
+        profile_items.append(pystray.Menu.SEPARATOR)
+        profile_items.extend(
+            [
+                pystray.MenuItem(
+                    p.display_name,
+                    self._action_select_profile(p.id),
+                    checked=self._is_profile_selected(p.id),
+                    radio=True,
+                )
+                for p in self._profiles
+            ]
+        )
 
         mode_menu = pystray.Menu(
             pystray.MenuItem("都要（弹窗 + 响铃）", self._action_set_mode("both"), checked=self._is_mode("both"), radio=True),
@@ -389,10 +449,9 @@ class TrayApp:
             pystray.MenuItem("（当前游戏无模板定义）", lambda i, it: None)
         )
 
-        # ROI tuner menu
         step = float(self._cfg.get("roi_step", 0.005) or 0.005)
         roi_menu = pystray.Menu(
-            pystray.MenuItem(f"预览 ROI（打开图片）", self._action_preview_roi),
+            pystray.MenuItem("预览 ROI（打开图片）", self._action_preview_roi),
             pystray.MenuItem(f"设置步长 step = {step:.4f}", self._action_set_roi_step),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("↑ 上移", self._action_roi_move("up")),

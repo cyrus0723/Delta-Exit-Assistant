@@ -56,6 +56,16 @@ class TkDialogService:
         self._root.after(50, poll)
         self._root.mainloop()
 
+    def run_in_tk(self, fn: Callable[[tk.Tk], Any], timeout: float = 120.0) -> Any:
+        """
+        Execute a custom function inside tkinter thread.
+        fn will receive the hidden root window.
+        """
+        def _f():
+            return fn(self._root)
+
+        return self._call(_f, timeout=timeout)
+
     def _call(self, fn: Callable[[], Any], timeout: float = 60.0) -> Any:
         job = _TkJob(fn=fn, done=threading.Event(), out={})
         self._q.put(job)
@@ -66,19 +76,22 @@ class TkDialogService:
         def _f():
             messagebox.showinfo(title, msg, parent=self._root)
             return None
-
         self._call(_f)
+
+    def confirm(self, title: str, msg: str) -> bool:
+        def _f():
+            return messagebox.askyesno(title, msg, parent=self._root)
+        v = self._call(_f)
+        return bool(v)
 
     def ask_float(self, title: str, prompt: str, initial: float) -> Optional[float]:
         def _f():
             return simpledialog.askfloat(title, prompt, initialvalue=initial, parent=self._root)
-
         v = self._call(_f)
         return None if v is None else float(v)
 
     def ask_str(self, title: str, prompt: str, initial: str) -> Optional[str]:
         def _f():
             return simpledialog.askstring(title, prompt, initialvalue=initial, parent=self._root)
-
         v = self._call(_f)
         return None if v is None else str(v)
