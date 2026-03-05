@@ -8,6 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List
 
+from game_wizard import ask_new_game_name, RoiSelector, NewGameInfo, create_profile_files
+
 import pystray
 from PIL import Image
 
@@ -49,6 +51,44 @@ enable_dpi_awareness()
 
 
 class TrayApp:
+    #在 TrayApp 里加一个 action：_action_new_game
+    def _action_new_game(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        # 1) 名称
+        res = ask_new_game_name("新建游戏")
+        if not res:
+            return
+        game_id, display_name = res
+
+        # 2) ROI 框选
+        self._dlg.info("ROI 框选提示", "请切回游戏画面停在“结算界面”，然后在接下来窗口中拖拽框选“结算标题区域”。\n回车确认，Esc取消。")
+        roi = RoiSelector().select()
+        if roi is None:
+            return
+
+        # 3) 写 profile + 建目录
+        info = NewGameInfo(game_id=game_id, display_name=display_name, roi_rel=roi)
+        try:
+            create_profile_files(info)
+        except Exception as e:
+            self._dlg.info("新建失败", repr(e))
+            return
+
+        # 4) 重新加载 profiles，并切换到新游戏
+        self._profiles = load_profiles_from_assets()
+        for p in self._profiles:
+            if p.id == game_id:
+                self._profile_base = p
+                break
+        self._profile = self._apply_roi_override(self._profile_base)  # 若无 override 就是 base
+
+        self._detector.set_profile(self._profile)
+        self._notifier.set_profile(self._profile)
+
+        self._persist()
+        self._rebuild_menu()
+
+        self._dlg.info("新建成功", f"已创建：{display_name}（{game_id}）\n\n下一步：到结算界面后使用“抓取模板→抓取：胜利/败北/平局”。")
+    
     def __init__(self) -> None:
         self._cfg: Dict[str, Any] = load_config()
         self._dlg = TkDialogService()
@@ -357,14 +397,17 @@ class TrayApp:
     # -------------------------
     def _build_menu(self) -> pystray.Menu:
         profile_items = [
-            pystray.MenuItem(
-                p.display_name,
-                self._action_select_profile(p.id),
-                checked=self._is_profile_selected(p.id),
-                radio=True,
-            )
-            for p in self._profiles
+        pystray.MenuItem(
+            p.display_name,
+            self._action_select_profile(p.id),
+            checked=self._is_profile_selected(p.id),
+            radio=True,
+        )
+        for p in self._profiles
         ]
+        profile_items.append(pystray.Menu.SEPARATOR)
+        profile_items.append(pystray.MenuItem("新建游戏…", self._action_new_game))
+        
 
         mode_menu = pystray.Menu(
             pystray.MenuItem("都要（弹窗 + 响铃）", self._action_set_mode("both"), checked=self._is_mode("both"), radio=True),
@@ -423,3 +466,5 @@ class TrayApp:
 
     def run(self) -> None:
         self._icon.run()
+        
+    
