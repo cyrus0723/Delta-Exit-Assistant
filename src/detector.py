@@ -107,13 +107,9 @@ class Detector:
         profile = self.get_profile()
         new_tpls: Dict[str, Tuple[str, np.ndarray]] = {}
         for t in profile.templates:
-            try:
-                abs_path = resolve_resource_path(t.path)
-                gray = load_gray_compat(abs_path)
-                new_tpls[t.id] = (t.label, gray)
-            except Exception:
-                # 模板不存在/读失败：跳过
-                continue
+            abs_path = resolve_resource_path(t.path)
+            gray = load_gray_compat(abs_path)
+            new_tpls[t.id] = (t.label, gray)
         self._tpls = new_tpls
 
     # -------------------------
