@@ -1,4 +1,3 @@
-# src/profiles.py
 from __future__ import annotations
 
 import json
@@ -9,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from roi import RoiRel
+from config_store import app_root
 
 
 @dataclass(frozen=True)
@@ -26,42 +26,21 @@ class GameProfile:
     templates: List[TemplateItem]
 
 
-def resource_root() -> Path:
+def assets_root() -> Path:
     """
-    Read-only resource root:
-    - dev: project root
-    - pyinstaller: sys._MEIPASS (temp)
+    Writable assets root beside exe:
+      <app_root>/assets
     """
-    if hasattr(sys, "_MEIPASS"):
-        return Path(getattr(sys, "_MEIPASS"))  # type: ignore[arg-type]
-    return Path(__file__).resolve().parent.parent
-
-
-def runtime_root() -> Path:
-    """
-    Writable runtime root:
-    - dev: project root
-    - frozen exe: directory where the exe is located
-    """
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
+    return app_root() / "assets"
 
 
 def resolve_resource_path(rel_path: str) -> str:
     """
-    Resolve path with override priority:
-      1) runtime_root()/rel_path  (user-captured templates)
-      2) resource_root()/rel_path (bundled assets)
+    Always resolve from runtime app_root (writable assets),
+    because you decided to ship assets folder next to exe.
     """
     rel_path = rel_path.replace("\\", "/").strip()
-
-    p_runtime = runtime_root() / rel_path
-    if p_runtime.exists():
-        return str(p_runtime)
-
-    p_bundle = resource_root() / rel_path
-    return str(p_bundle)
+    return str((app_root() / rel_path).resolve())
 
 
 def _safe_read_json(path: Path) -> Optional[dict]:
@@ -102,34 +81,21 @@ def _parse_profile(data: dict) -> Optional[GameProfile]:
 
 def load_profiles_from_assets() -> List[GameProfile]:
     """
-    Merge profiles from:
-      - resource_root/assets/profiles/*.json (bundled)
-      - runtime_root/assets/profiles/*.json  (user/custom, overrides same id)
+    Load ONLY from writable runtime assets:
+      <app_root>/assets/profiles/*.json
     """
     by_id: Dict[str, GameProfile] = {}
+    prof_dir = assets_root() / "profiles"
+    if not prof_dir.exists():
+        return []
 
-    # 1) bundled first
-    bundle_dir = resource_root() / "assets" / "profiles"
-    if bundle_dir.exists():
-        for fp in sorted(bundle_dir.glob("*.json")):
-            data = _safe_read_json(fp)
-            if not data:
-                continue
-            p = _parse_profile(data)
-            if p:
-                by_id[p.id] = p
-
-    # 2) runtime overrides/additions
-    run_dir = runtime_root() / "assets" / "profiles"
-    if run_dir.exists():
-        for fp in sorted(run_dir.glob("*.json")):
-            data = _safe_read_json(fp)
-            if not data:
-                continue
-            p = _parse_profile(data)
-            if p:
-                by_id[p.id] = p
-
+    for fp in sorted(prof_dir.glob("*.json")):
+        data = _safe_read_json(fp)
+        if not data:
+            continue
+        p = _parse_profile(data)
+        if p:
+            by_id[p.id] = p
     return list(by_id.values())
 
 
@@ -155,8 +121,7 @@ def pick_profile(profiles: List[GameProfile], selected_id: str) -> GameProfile:
 
 def normalize_profile_id(name: str) -> str:
     """
-    Turn user input into a safe id for filename/folder.
-    Example: "OW2" -> "ow2", "Over Watch 2" -> "over_watch_2"
+    Safe id for filename/folder.
     """
     s = (name or "").strip().lower()
     s = re.sub(r"\s+", "_", s)
@@ -166,12 +131,12 @@ def normalize_profile_id(name: str) -> str:
 
 
 def profile_file_path(profile_id: str) -> Path:
-    return runtime_root() / "assets" / "profiles" / f"{profile_id}.json"
+    return assets_root() / "profiles" / f"{profile_id}.json"
 
 
 def save_profile(profile: GameProfile) -> Path:
     """
-    Save profile into runtime_root/assets/profiles/<id>.json
+    Save profile into <app_root>/assets/profiles/<id>.json
     """
     out = profile_file_path(profile.id)
     out.parent.mkdir(parents=True, exist_ok=True)

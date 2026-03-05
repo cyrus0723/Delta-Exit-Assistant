@@ -1,4 +1,3 @@
-# src/ui_tray.py
 from __future__ import annotations
 
 import ctypes
@@ -58,18 +57,14 @@ class TrayApp:
         self._cfg: Dict[str, Any] = load_config()
         self._dlg = TkDialogService()
 
-        # profiles
         self._profiles: List[GameProfile] = load_profiles_from_assets()
         if not self._profiles:
             self._profiles = [fallback_delta_profile_from_legacy_config(self._cfg)]
 
         selected_id = str(self._cfg.get("selected_profile_id", "")).strip() or self._profiles[0].id
         self._profile_base: GameProfile = pick_profile(self._profiles, selected_id)
-
-        # apply roi override if exists
         self._profile: GameProfile = self._apply_roi_override(self._profile_base)
 
-        # detector config
         det_cfg = DetectorConfig(
             threshold=float(self._cfg.get("threshold", 0.82)),
             hysteresis=float(self._cfg.get("hysteresis", 0.12)),
@@ -77,7 +72,6 @@ class TrayApp:
             cooldown_sec=float(self._cfg.get("cooldown_sec", 3.0)),
         )
 
-        # notifier settings
         title_tpl = str(self._cfg.get("title_tpl", "{game} 结算检测")).strip() or "{game} 结算检测"
         msg_tpl = str(self._cfg.get("msg_tpl", "{label}（score={score:.3f}）")).strip() or "{label}（score={score:.3f}）"
         mode = str(self._cfg.get("notify_mode", "both")).strip().lower()
@@ -87,10 +81,8 @@ class TrayApp:
         self._notify_settings = NotifySettings(title_tpl=title_tpl, msg_tpl=msg_tpl, mode=mode)
         self._notifier = Notifier(APP_NAME, self._profile, self._notify_settings)
 
-        # detector
         self._detector = Detector(det_cfg, self._profile, on_match=self._on_match)
 
-        # tray icon
         icon_path = resolve_resource_path("assets/icon.ico")
         try:
             image = Image.open(icon_path)
@@ -100,42 +92,17 @@ class TrayApp:
         self._icon = pystray.Icon(APP_NAME, image, APP_NAME)
         self._icon.menu = self._build_menu()
 
-        # persist once
         self._persist()
 
-    # -------------------------
-    # ROI override helpers
-    # -------------------------
     def _apply_roi_override(self, base: GameProfile) -> GameProfile:
         override = load_roi_override(self._cfg, base.id)
         if override is None:
             return base
         return replace(base, roi_rel=override)
 
-    def _current_tuner(self) -> RoiTuner:
-        step = float(self._cfg.get("roi_step", 0.005) or 0.005)
-        return RoiTuner(roi=self._profile.roi_rel, step=step)
-
-    def _save_tuner(self, tuner: RoiTuner) -> None:
-        save_roi_override(self._cfg, self._profile_base.id, tuner.roi)
-        self._cfg["roi_step"] = tuner.step
-
-        self._profile = replace(self._profile_base, roi_rel=tuner.roi)
-        self._detector.set_profile(self._profile)
-        self._notifier.set_profile(self._profile)
-
-        self._persist()
-        self._rebuild_menu()
-
-    # -------------------------
-    # Callback from detector
-    # -------------------------
     def _on_match(self, result: MatchResult) -> None:
         self._notifier.notify(result)
 
-    # -------------------------
-    # Persistence + menu refresh
-    # -------------------------
     def _persist(self) -> None:
         self._cfg["selected_profile_id"] = self._profile_base.id
         self._cfg["threshold"] = self._detector.cfg.threshold
@@ -147,12 +114,26 @@ class TrayApp:
         self._cfg["notify_mode"] = self._notify_settings.mode
         save_config(self._cfg)
 
+    def _force_tray_refresh(self) -> None:
+        """
+        Windows tray menu sometimes caches submenu handles.
+        Toggling visibility forces rebuild in practice.
+        """
+        try:
+            self._icon.visible = False
+            self._icon.visible = True
+        except Exception:
+            pass
+
     def _rebuild_menu(self) -> None:
         self._icon.menu = self._build_menu()
-        self._icon.update_menu()
+        try:
+            self._icon.update_menu()
+        except Exception:
+            # pystray versions differ; fallback
+            pass
+        self._force_tray_refresh()
 
-    # -------------------------
-    # Actions: start/stop
     # -------------------------
     def _action_start(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         self._detector.start()
@@ -170,8 +151,6 @@ class TrayApp:
             pass
         icon.stop()
 
-    # -------------------------
-    # Actions: select profile
     # -------------------------
     def _is_profile_selected(self, profile_id: str):
         def _inner(item: pystray.MenuItem) -> bool:
@@ -193,41 +172,45 @@ class TrayApp:
             self._rebuild_menu()
         return _inner
 
+    def _action_refresh_profiles(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        cur = self._profile_base.id
+        self._profiles = load_profiles_from_assets()
+        if not self._profiles:
+            self._profiles = [fallback_delta_profile_from_legacy_config(self._cfg)]
+        self._profile_base = pick_profile(self._profiles, cur)
+        self._profile = self._apply_roi_override(self._profile_base)
+        self._detector.set_profile(self._profile)
+        self._notifier.set_profile(self._profile)
+        self._persist()
+        self._rebuild_menu()
+
     # -------------------------
-    # New Game flow
-    # -------------------------
+    # New Game
     def _action_new_game(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         name = self._dlg.ask_str("新建游戏", "请输入游戏名称（例如：OW2 / Overwatch 2）", "")
         if not name:
             return
 
         pid = normalize_profile_id(name)
-        # avoid collision: if exists, ask overwrite?
         fp = profile_file_path(pid)
+
         if fp.exists():
-            ok = self._dlg.confirm("已存在同名游戏", f"已存在 {pid}.json\n是否覆盖？（会覆盖该 profile 的 ROI/模板定义）")
+            ok = self._dlg.confirm("已存在同名游戏", f"已存在 {pid}.json\n是否覆盖？")
             if not ok:
                 return
 
-        self._dlg.info("选择 ROI", "接下来请在屏幕上拖拽框选『结算标题/结果文字』所在区域。\n按 Enter 确认，按 ESC 取消。")
-
+        self._dlg.info("选择 ROI", "拖拽框选『结算标题/结果文字』所在区域。\nEnter 确认，ESC 取消。")
         roi_rel: RoiRel | None = self._dlg.run_in_tk(lambda root: select_roi_fullscreen(root, title=f"选择 ROI - {name}"))
         if roi_rel is None:
             return
 
-        # default templates (win/lose/draw reserved)
         templates = [
             TemplateItem(id=f"{pid}_win", label="胜利", path=f"assets/templates/{pid}/win.png"),
             TemplateItem(id=f"{pid}_lose", label="败北", path=f"assets/templates/{pid}/lose.png"),
             TemplateItem(id=f"{pid}_draw", label="平局", path=f"assets/templates/{pid}/draw.png"),
         ]
 
-        profile = GameProfile(
-            id=pid,
-            display_name=str(name).strip(),
-            roi_rel=roi_rel,
-            templates=templates,
-        )
+        profile = GameProfile(id=pid, display_name=str(name).strip(), roi_rel=roi_rel, templates=templates)
 
         try:
             out = save_profile(profile)
@@ -235,8 +218,12 @@ class TrayApp:
             self._dlg.info("创建失败", repr(e))
             return
 
-        # reload profiles list and switch to it
+        # ✅关键：重新加载列表 + 立刻切换
         self._profiles = load_profiles_from_assets()
+        if not any(p.id == pid for p in self._profiles):
+            # fallback: 如果读取失败，至少把它放入内存
+            self._profiles.append(profile)
+
         self._profile_base = pick_profile(self._profiles, pid)
         self._profile = self._apply_roi_override(self._profile_base)
 
@@ -246,97 +233,10 @@ class TrayApp:
         self._persist()
         self._rebuild_menu()
 
-        self._dlg.info(
-            "创建成功",
-            f"已创建：\n{out}\n\n下一步：进入结算界面，托盘右键 → 抓取模板 → 分别抓取『胜利/败北/平局』。",
-        )
+        self._dlg.info("创建成功", f"已创建：\n{out}\n\n下一步：到结算界面 → 抓取模板 → 抓取：胜利/败北/平局。")
 
     # -------------------------
-    # Actions: tuning detector
-    # -------------------------
-    def _action_set_threshold(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        v = self._dlg.ask_float("设置匹配阈值", "threshold（建议 0.70 ~ 0.90）", self._detector.cfg.threshold)
-        if v is None:
-            return
-        self._detector.cfg.threshold = max(0.0, min(1.0, float(v)))
-        self._persist()
-        self._rebuild_menu()
-
-    def _action_set_hysteresis(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        v = self._dlg.ask_float("设置回落差值", "hysteresis（建议 0.08 ~ 0.20）\n越大越不容易重复提示", self._detector.cfg.hysteresis)
-        if v is None:
-            return
-        self._detector.cfg.hysteresis = max(0.0, min(1.0, float(v)))
-        self._persist()
-        self._rebuild_menu()
-
-    def _action_set_cooldown(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        v = self._dlg.ask_float("设置冷却时间", "cooldown_sec（秒，建议 1.0 ~ 10.0）", self._detector.cfg.cooldown_sec)
-        if v is None:
-            return
-        self._detector.cfg.cooldown_sec = max(0.0, float(v))
-        self._persist()
-        self._rebuild_menu()
-
-    def _action_set_interval(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        v = self._dlg.ask_float("设置扫描间隔", "scan_interval_sec（秒，建议 0.10 ~ 0.50）\n越小越灵敏但更耗资源", self._detector.cfg.scan_interval_sec)
-        if v is None:
-            return
-        self._detector.cfg.scan_interval_sec = max(0.05, float(v))
-        self._persist()
-        self._rebuild_menu()
-
-    # -------------------------
-    # Actions: notify mode
-    # -------------------------
-    def _is_mode(self, mode: str):
-        def _inner(item: pystray.MenuItem) -> bool:
-            return self._notify_settings.mode == mode
-        return _inner
-
-    def _action_set_mode(self, mode: str):
-        def _inner(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-            if mode not in VALID_NOTIFY_MODES:
-                return
-            self._notify_settings.mode = mode
-            self._persist()
-            self._rebuild_menu()
-        return _inner
-
-    # -------------------------
-    # Actions: edit notification text
-    # -------------------------
-    def _action_edit_text(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        self._dlg.info(
-            "可用占位符",
-            "你可以在标题/正文里使用：\n"
-            "  {game}  当前游戏名\n"
-            "  {label} 结果标签（来自 profile.json 的 templates[].label）\n"
-            "  {score} 匹配分数（支持格式：{score:.3f}）\n"
-            "  {id}    模板ID\n",
-        )
-
-        title = self._dlg.ask_str("编辑通知标题", "例如：{game} 结算检测", self._notify_settings.title_tpl)
-        if title is None:
-            return
-        msg = self._dlg.ask_str("编辑通知正文", "例如：{label}（score={score:.3f}）", self._notify_settings.msg_tpl)
-        if msg is None:
-            return
-
-        if title.strip():
-            self._notify_settings.title_tpl = title.strip()
-        if msg.strip():
-            self._notify_settings.msg_tpl = msg.strip()
-
-        self._persist()
-        self._rebuild_menu()
-
-    def _action_test_notify(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        self._notifier.notify(MatchResult(label="测试成功", template_id="test", score=0.999))
-
-    # -------------------------
-    # Actions: capture template
-    # -------------------------
+    # Capture templates
     def _action_capture_template(self, tpl: TemplateItem):
         def _inner(icon: pystray.Icon, item: pystray.MenuItem) -> None:
             try:
@@ -344,76 +244,19 @@ class TrayApp:
                 self._detector.reload_templates()
                 self._dlg.info("抓取模板成功", f"已保存：\n{saved}")
             except Exception as e:
-                self._dlg.info("抓取模板失败", repr(e))
+                self._dlg.info(
+                    "抓取模板失败",
+                    f"{repr(e)}\n\n模板路径：{tpl.path}\n游戏：{self._profile.display_name} ({self._profile.id})",
+                )
         return _inner
 
-    # -------------------------
-    # ROI tuner actions（保留）
-    # -------------------------
-    def _action_set_roi_step(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        cur = float(self._cfg.get("roi_step", 0.005) or 0.005)
-        v = self._dlg.ask_float("设置 ROI 步长", "建议：0.002 ~ 0.020\n(0.005 约等于 1920 宽下 9~10 像素)", cur)
-        if v is None:
-            return
-        self._cfg["roi_step"] = max(0.0005, float(v))
-        self._persist()
-        self._rebuild_menu()
-
-    def _action_preview_roi(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        try:
-            bgr = grab_profile_roi_bgr(self._profile)
-            tmp = Path(tempfile.gettempdir()) / f"roi_preview_{self._profile_base.id}.png"
-            import cv2
-            ok, buf = cv2.imencode(".png", bgr)
-            if ok:
-                tmp.write_bytes(buf.tobytes())
-                os.startfile(str(tmp))
-        except Exception as e:
-            self._dlg.info("预览失败", repr(e))
-
-    def _action_roi_move(self, direction: str):
-        def _inner(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-            t = self._current_tuner()
-            if direction == "left":
-                t.left()
-            elif direction == "right":
-                t.right()
-            elif direction == "up":
-                t.up()
-            elif direction == "down":
-                t.down()
-            self._save_tuner(t)
-        return _inner
-
-    def _action_roi_resize(self, which: str):
-        def _inner(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-            t = self._current_tuner()
-            if which == "wider":
-                t.wider()
-            elif which == "narrower":
-                t.narrower()
-            elif which == "taller":
-                t.taller()
-            elif which == "shorter":
-                t.shorter()
-            self._save_tuner(t)
-        return _inner
-
-    def _action_roi_reset(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        clear_roi_override(self._cfg, self._profile_base.id)
-        self._profile = self._profile_base
-        self._detector.set_profile(self._profile)
-        self._notifier.set_profile(self._profile)
-        self._persist()
-        self._rebuild_menu()
-
-    # -------------------------
-    # Build menu
     # -------------------------
     def _build_menu(self) -> pystray.Menu:
-        # “选择游戏”菜单：第一项就是“新建游戏…”
-        profile_items = [pystray.MenuItem("新建游戏…", self._action_new_game)]
-        profile_items.append(pystray.Menu.SEPARATOR)
+        profile_items = [
+            pystray.MenuItem("新建游戏…", self._action_new_game),
+            pystray.MenuItem("刷新游戏列表", self._action_refresh_profiles),
+            pystray.Menu.SEPARATOR,
+        ]
         profile_items.extend(
             [
                 pystray.MenuItem(
@@ -426,45 +269,9 @@ class TrayApp:
             ]
         )
 
-        mode_menu = pystray.Menu(
-            pystray.MenuItem("都要（弹窗 + 响铃）", self._action_set_mode("both"), checked=self._is_mode("both"), radio=True),
-            pystray.MenuItem("只弹窗", self._action_set_mode("toast"), checked=self._is_mode("toast"), radio=True),
-            pystray.MenuItem("只响铃", self._action_set_mode("sound"), checked=self._is_mode("sound"), radio=True),
-        )
-
-        settings_menu = pystray.Menu(
-            pystray.MenuItem(f"匹配阈值 threshold = {self._detector.cfg.threshold:.3f}", self._action_set_threshold),
-            pystray.MenuItem(f"回落差值 hysteresis = {self._detector.cfg.hysteresis:.3f}", self._action_set_hysteresis),
-            pystray.MenuItem(f"冷却时间 cooldown_sec = {self._detector.cfg.cooldown_sec:.2f}s", self._action_set_cooldown),
-            pystray.MenuItem(f"扫描间隔 scan_interval = {self._detector.cfg.scan_interval_sec:.2f}s", self._action_set_interval),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("提醒方式（弹窗/响铃）", mode_menu),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("编辑通知文本…", self._action_edit_text),
-            pystray.MenuItem("发送测试通知", self._action_test_notify),
-        )
-
         cap_items = [pystray.MenuItem(f"抓取：{t.label}", self._action_capture_template(t)) for t in self._profile.templates]
         capture_menu = pystray.Menu(*cap_items) if cap_items else pystray.Menu(
             pystray.MenuItem("（当前游戏无模板定义）", lambda i, it: None)
-        )
-
-        step = float(self._cfg.get("roi_step", 0.005) or 0.005)
-        roi_menu = pystray.Menu(
-            pystray.MenuItem("预览 ROI（打开图片）", self._action_preview_roi),
-            pystray.MenuItem(f"设置步长 step = {step:.4f}", self._action_set_roi_step),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("↑ 上移", self._action_roi_move("up")),
-            pystray.MenuItem("↓ 下移", self._action_roi_move("down")),
-            pystray.MenuItem("← 左移", self._action_roi_move("left")),
-            pystray.MenuItem("→ 右移", self._action_roi_move("right")),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("加宽", self._action_roi_resize("wider")),
-            pystray.MenuItem("变窄", self._action_roi_resize("narrower")),
-            pystray.MenuItem("加高", self._action_roi_resize("taller")),
-            pystray.MenuItem("变矮", self._action_roi_resize("shorter")),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("恢复为默认 ROI", self._action_roi_reset),
         )
 
         return pystray.Menu(
@@ -472,9 +279,7 @@ class TrayApp:
             pystray.MenuItem("停止检测", self._action_stop, enabled=lambda item: self._detector.is_running()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("选择游戏", pystray.Menu(*profile_items)),
-            pystray.MenuItem("ROI 调整", roi_menu),
             pystray.MenuItem("抓取模板", capture_menu),
-            pystray.MenuItem("设置", settings_menu),
             pystray.MenuItem("重载模板", self._action_reload_templates),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("退出", self._action_quit),
