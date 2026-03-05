@@ -1,220 +1,271 @@
-# 🎮 Delta Exit Assistant —— 多游戏结算检测托盘助手（V2）
+# 🎮 Delta Exit Assistant（下机助手）
 
-一个用于**检测游戏结算画面**并提醒你“该下机了”的 Windows 托盘工具。  
-V2 版本已升级为 **多游戏 Profile 架构**：每个游戏独立 ROI 与模板组，可在托盘中切换游戏，且支持一键抓取模板与在线微调 ROI。
+一个 Windows 托盘常驻的“结算检测提醒器”：当你在游戏里打完一局、进入结算界面时，程序会自动识别结算画面（胜利/失败/平局等），并用 **Windows 通知弹窗 / 提示音**提醒你“该下机了”。
 
----
-
-## ✨ V2 核心特性
-
-- ✅ **多游戏支持（GameProfile）**
-  - 每个游戏一个 profile：`ROI（相对坐标） + 模板组`
-  - 托盘菜单一键切换当前游戏
-
-- ✅ **相对 ROI（适配分辨率/缩放）**
-  - `roi_rel = {x,y,w,h}` 采用屏幕比例，不再写死像素
-  - 支持 Windows DPI Awareness（125%/150% 等缩放更稳）
-
-- ✅ **模板组匹配：Best Match**
-  - 当前 profile 下只匹配它自己的 ROI + 模板集合
-  - 不扫描多个区域，不匹配多个游戏，资源占用更可控
-
-- ✅ **结算界面“只提示一次”**
-  - 内置 **armed/hysteresis 回落机制 + cooldown 冷却**：
-    - 停留在结算界面不会疯狂重复提醒
-    - 退出结算（分数跌破回落阈值）才会重新武装
-
-- ✅ **通知系统（Win11 Toast） + 提示音**
-  - 使用 `winotify` 发送 Windows 通知（打包后稳定）
-  - 支持：**只响铃 / 只弹窗 / 都要**
-
-- ✅ **托盘 UI 可调参数**
-  - threshold / hysteresis / cooldown / scan_interval
-  - 文本模板可编辑（支持占位符）
-  - “发送测试通知”一键验证
-
-- ✅ **抓取模板（无需截图软件）**
-  - 托盘菜单：`抓取模板 → 抓取：胜利/失败/平局...`
-  - 自动截取当前游戏 ROI 并保存为对应模板图片
-  - 保存位置：优先写入 exe 同级的 `assets/templates/...`（可写、可持续）
-
-- ✅ **ROI 调整器（roi_tuner）**
-  - 托盘菜单：`ROI 调整 → 预览 ROI / 移动 / 缩放 / 步长 / 恢复默认`
-  - 调整结果存入 `config.json` 的 `roi_overrides`，不污染 profile.json
-  - 适配不同玩家 UI/分辨率/字体渲染差异
+项目目标不是做外挂，而是做一个**轻量、低打扰、可扩展到多游戏**的结算检测工具。
 
 ---
 
-## 🧠 工作原理（简述）
+## ✨ 功能特性
 
-Detector 只关心一件事：
-
-> 当前选中的 `GameProfile` → 截该 profile 的 ROI → 在该 profile 的模板组里取 best match → 达到阈值并满足回落/冷却 → 触发回调
-
-托盘 UI 负责：
-- 选择游戏 profile
-- 调整参数/文案/提醒方式
-- 抓取模板
-- 微调 ROI
-
----
-
-## 📁 项目结构（V2）
-****
-assets/
-icon.ico
-profiles/
-delta.json
-valorant.json
-...
-templates/
-delta/
-success.png
-fail.png
-valorant/
-win.png
-lose.png
-draw.png
-
-src/
-app.py # 入口：只负责启动 TrayApp
-ui_tray.py # 托盘 UI & 菜单动作（主逻辑）
-ui_dialogs.py # Tk 对话框服务（线程安全）
-notify.py # 通知/响铃/文本模板渲染
-capture.py # 抓取 ROI 保存为模板、ROI 预览截图
-roi_tuner.py # ROI 微调器（移动/缩放/步长/重置）
-config_store.py # config.json 读写
-detector.py # 检测核心（armed + hysteresis + cooldown）
-profiles.py # profile 加载 + 资源路径解析（支持 runtime override）
-roi.py # 相对 ROI → 像素 ROI
-
+* ✅ **托盘常驻**：无窗口运行，右键菜单控制
+* ✅ **多游戏 Profile**：每个游戏一套配置（ROI + 模板）
+* ✅ **自定义游戏流程**：在托盘里新建游戏 → 框选 ROI → 抓取模板 → 立即可用
+* ✅ **相对 ROI 坐标**：`roi_rel` 用 0~1 的相对比例，适配不同分辨率/缩放
+* ✅ **模板匹配识别**：OpenCV `matchTemplate`，取 best match
+* ✅ **冷却机制**：停留在结算界面不会疯狂重复提醒
+* ✅ **提醒模式可选**：只响铃 / 只弹窗 / 都要
+* ✅ **可配置提示文本**：支持 `{game}/{label}/{score}/{id}` 占位符
+* ✅ **可手动微调 ROI**：托盘里提供移动/缩放步长微调 + 预览
 
 ---
 
-## 🧩 GameProfile 配置（assets/profiles/*.json）
+## 🧠 核心实现思路（技术方法）
 
-每个游戏一个 profile，例如 `assets/profiles/valorant.json`：
+### 1) Profile 化：把“不同游戏”抽象成配置
+
+每个游戏一个 `profile.json`，包含：
+
+* `id`：游戏标识（用于文件名与模板目录）
+* `display_name`：托盘显示名
+* `roi_rel`：截图区域（相对坐标）
+* `templates[]`：模板列表（每个模板是一张图片，代表一种结算结果）
+
+示例（`assets/profiles/valorant.json`）：
 
 ```json
 {
   "id": "valorant",
   "display_name": "无畏契约",
-  "roi_rel": { "x": 0.340104, "y": 0.301852, "w": 0.227083, "h": 0.400926 },
+  "roi_rel": { "x": 0.34, "y": 0.30, "w": 0.227, "h": 0.401 },
   "templates": [
     { "id": "valorant_win",  "label": "胜利", "path": "assets/templates/valorant/win.png" },
     { "id": "valorant_lose", "label": "败北", "path": "assets/templates/valorant/lose.png" },
     { "id": "valorant_draw", "label": "平局", "path": "assets/templates/valorant/draw.png" }
   ]
 }
-roi_rel 四个参数含义
+```
 
-x：ROI 左上角横坐标占屏幕宽度比例
+---
 
-y：ROI 左上角纵坐标占屏幕高度比例
+### 2) ROI（截图区域）用“相对坐标”表示
 
-w：ROI 宽度占屏幕宽度比例
+`roi_rel` 的四个参数含义：
 
-h：ROI 高度占屏幕高度比例
+* `x`：ROI 左上角相对屏幕宽度的位置（0~1）
+* `y`：ROI 左上角相对屏幕高度的位置（0~1）
+* `w`：ROI 宽度相对屏幕宽度比例（0~1）
+* `h`：ROI 高度相对屏幕高度比例（0~1）
 
-🛠️ 使用指南（推荐流程）
-1）选择游戏
+运行时会用 `screen_w/screen_h` 把它转成像素坐标 `RoiPx(left, top, width, height)`。
 
-托盘 → 选择游戏 → 选择对应 profile
+这样能适配：
 
-2）校准 ROI（如果截图歪）
+* 不同分辨率（1080p/2K/4K）
+* 不同缩放（100%/125%/150%）
 
-托盘 → ROI 调整
+---
 
-“预览 ROI”查看当前截取区域
+### 3) 检测链路（Detector）
 
-用 “上/下/左/右”移动 ROI
+检测器的职责只做一件事：
 
-用 “加宽/变窄/加高/变矮”调整大小
+> 当前选中的 `GameProfile` → 截取该 profile 的 ROI → 在模板里取 best match → 达到阈值后触发回调
 
-“设置步长”建议：
+流程：
 
-1920×1080 下：0.005 ≈ 9~10 像素
+1. 用 `mss` 截屏 ROI
+2. ROI 转灰度
+3. 对每个模板做 `cv2.matchTemplate`
+4. 取最大 `score` 的模板作为 best match
+5. `score >= threshold` 且满足冷却条件 → 触发提醒
 
-更精细：0.002
+> 注意：模板文件允许不存在（例如 “平局”还没抓取），检测器会跳过缺失模板，不影响其它模板工作。
 
-调整结果会写入 config.json（roi_overrides），不改 profile.json。
+---
 
-3）抓取模板
+### 4) 冷却机制（避免重复弹窗/响铃）
 
-进入游戏结算界面（胜利/失败/平局）
-托盘 → 抓取模板 → 选择对应项（例如“抓取：胜利”）
+当你停留在结算界面时，识别会一直命中同一个模板。
 
-模板保存到：
+为避免反复提醒，Detector 使用：
 
-assets/templates/<game>/<xxx>.png（优先写在 exe 同级，可持久）
+* `cooldown_sec`：触发一次提醒后，至少隔 N 秒才允许再次触发
+* `hysteresis`：触发后需要 score 下降到 `threshold - hysteresis` 以下才“重新武装”
 
-4）启动检测
+两者结合可以做到：
 
-托盘 → 启动检测
-满足阈值后弹窗/响铃提醒。
+* 结算界面停留不刷屏
+* 真正离开结算界面后再进入，会再次提醒
 
-⚙️ 设置（托盘 → 设置）
+---
 
-可调参数：
+### 5) 托盘 UI（pystray）
 
-threshold：匹配阈值（建议 0.70~0.90）
+托盘提供的关键入口：
 
-hysteresis：回落差值（建议 0.08~0.20）
+* **启动检测 / 停止检测**
+* **选择游戏（profiles 列表）**
+* **新建游戏…**
+* **抓取模板（胜利/败北/平局…）**
+* **ROI 调整**（移动/缩放/预览/恢复默认）
+* **设置**（阈值、冷却、扫描间隔、提醒方式、文本占位符）
+* **退出**
 
-cooldown_sec：冷却时间（秒）
+---
 
-scan_interval_sec：扫描间隔（秒，越小越灵敏但更耗资源）
+### 6) 新建游戏完整工作流（Custom Game）
 
-提醒方式：
+这是本项目“可扩展到任意游戏”的核心能力：
 
-都要（弹窗 + 响铃）
+1. 托盘 → `新建游戏…`
+2. 输入游戏名（例如 `ow2`）
+3. 弹出全屏遮罩，鼠标拖拽框选 ROI
+4. 自动创建：
 
-只弹窗
+   * `assets/profiles/ow2.json`
+   * `assets/templates/ow2/`（空目录）
+5. 自动切换到 ow2 profile
+6. 在游戏结算界面 → `抓取模板` → 抓取胜利/失败/平局
+7. 下次启动软件会遍历 `assets/profiles`，ow2 会永久存在并可用
 
-只响铃
+---
 
-通知文本：
+## 📦 文件结构
 
-标题/正文都可编辑，支持占位符：
+运行目录结构（推荐）：
 
-{game} 当前游戏名
+```text
+📦 程序根目录
+ ┣ 📜 Delta-Exit-Assistant.exe
+ ┗ 📂 assets
+    ┣ 📂 profiles
+    ┃  ┣ 📜 delta.json
+    ┃  ┣ 📜 valorant.json
+    ┃  ┗ 📜 ow2.json          （新建游戏时生成）
+    ┗ 📂 templates
+       ┣ 📂 delta
+       ┃  ┣ 🖼 success.png
+       ┃  ┗ 🖼 fail.png
+       ┣ 📂 valorant
+       ┃  ┣ 🖼 win.png
+       ┃  ┣ 🖼 lose.png
+       ┃  ┗ 🖼 draw.png（可选）
+       ┗ 📂 ow2
+          ┣ 🖼 win.png        （抓取模板生成）
+          ┣ 🖼 lose.png
+          ┗ 🖼 draw.png（可选）
+```
 
-{label} 模板 label（来自 profile.json）
+---
 
-{score} 匹配分数（支持 {score:.3f}）
+## 🚀 使用方法（给用户）
 
-{id} 模板 ID
+### 1) 运行
 
-📦 打包（PyInstaller）
+双击 `Delta-Exit-Assistant.exe`
+程序会出现在系统托盘（右下角）。
 
-建议使用：
+### 2) 选择游戏并启动检测
 
-python -m PyInstaller --clean -F -w --paths "src" `
+托盘右键：
+
+1. `选择游戏` → 选一个已有游戏
+2. 点击 `启动检测`
+3. 打完一局进入结算界面 → 识别成功会弹窗/响铃
+
+### 3) 抓取模板（让识别更准）
+
+进入“结算界面”时：
+
+托盘右键 → `抓取模板` → 选择某个结果（胜利/败北/平局）
+程序会把当前 ROI 截图保存为模板（png），并立即生效。
+
+### 4) 新建游戏（适配其它游戏）
+
+托盘右键 → `新建游戏…`
+
+* 输入名称（例如 `ow2`）
+* 框选 ROI（结算标题/关键字区域）
+* 进入结算界面后抓取模板
+* 下次启动即可直接选择该游戏
+
+### 5) ROI 调整（截图歪了就用它）
+
+如果识别不稳定，多数是 ROI 没框准。
+
+托盘右键 → `ROI 调整`：
+
+* `预览 ROI`：打开当前截图看看是否框对
+* 用方向键菜单移动 ROI
+* 用加宽/变窄/加高/变矮微调
+* 需要时可恢复默认 ROI
+
+### 6) 设置提醒方式与文案
+
+托盘右键 → `设置`：
+
+* **提醒方式**：都要 / 只弹窗 / 只响铃
+* **通知文本**：标题和正文支持占位符：
+
+占位符：
+
+* `{game}` 当前游戏名
+* `{label}` 结果标签（来自 profile 的 templates[].label）
+* `{score}` 匹配分数（可用 `{score:.3f}` 格式）
+* `{id}` 模板 ID
+
+---
+
+## 🛠️ 开发 & 安装依赖
+
+建议 Python 3.10+。
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 🧱 打包（记录）
+
+本项目采用 **onedir 外置 assets**（便于动态写入模板/新建 profiles）。
+
+在项目根目录运行：
+
+```powershell
+python -m PyInstaller --clean --noconfirm -w --onedir --paths "src" `
   "src/app.py" --name "Delta-Exit-Assistant" --add-data "assets;assets"
+```
 
-生成位置：
+打包结果在：
 
-dist/Delta-Exit-Assistant.exe
+```text
+dist/Delta-Exit-Assistant/
+  Delta-Exit-Assistant.exe
+  assets/...
+```
 
-注意：V2 支持运行时写入模板（抓取模板）与 config.json，建议把 exe 放在你有写权限的目录（例如桌面/某个文件夹），避免放在系统受限目录。
+> 如果你后续使用 Inno Setup 打包安装器，把整个 `dist/Delta-Exit-Assistant` 作为安装目录即可。
 
-🧯 常见问题
-1）为什么停留在结算界面不会反复提醒？
+---
 
-V2 使用 “armed + hysteresis + cooldown”：
+## ⚠️ 常见问题
 
-达到阈值触发一次后 armed=False
+### Q1：新建游戏后“抓取模板失败：FileNotFoundError”
 
-只有分数跌破 (threshold - hysteresis) 才重新 armed=True
+通常是因为模板路径/目录不在 exe 同目录下的 `assets/`。
+请确认运行目录结构如上，且 exe 同级有 `assets/templates/<game>/`。
 
-2）为什么某个模板文件不存在会出问题？
+### Q2：识别一直不触发/误触发
 
-建议先放占位图（复制 win/lose 任一张），或先用“抓取模板”生成对应文件。
+* 先用 `ROI 调整 → 预览 ROI`，确认框到的就是“结算关键文字区域”
+* 提高阈值 `threshold` 会减少误报
+* 增大 `cooldown_sec` 会减少重复提醒
+* 如果字体/背景变化大，建议抓取更“稳定”的结算区域作为模板
 
-3）模板截图偏了怎么办？
+---
 
-用 “ROI 调整 → 预览 ROI” 先把区域调准，再抓取模板。
+## 📌 免责声明
 
-✅ V2 版本里程碑
-
-V2 到此为止，后续功能（如引导式抓取模板、用户自定义新增游戏、模板管理器、多屏选择等）可在此架构上继续扩展。
+本项目仅基于 **本机屏幕截图 + 图像模板匹配**进行提醒，不注入游戏、不读写游戏内存、不修改游戏文件。请合理使用，避免影响正常游戏体验。
