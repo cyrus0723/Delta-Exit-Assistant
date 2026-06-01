@@ -55,11 +55,8 @@ class Notifier:
     def _beep(self) -> None:
         winsound.MessageBeep(winsound.MB_ICONASTERISK)
 
-    def notify(self, result: MatchResult) -> None:
-        title = self._format(self.settings.title_tpl, result)
-        msg = self._format(self.settings.msg_tpl, result)
-
-        mode = (self.settings.mode or "both").lower()
+    def _deliver(self, title: str, msg: str, mode: str) -> None:
+        mode = (mode or "both").lower()
         if mode not in VALID_NOTIFY_MODES:
             mode = "both"
 
@@ -74,3 +71,13 @@ class Notifier:
                 self._beep()
             except Exception:
                 pass
+
+    def notify(self, result: MatchResult) -> None:
+        title = self._format(self.settings.title_tpl, result)
+        msg = self._format(self.settings.msg_tpl, result)
+        self._deliver(title, msg, self.settings.mode)
+
+    def notify_sleep(self, result: MatchResult, title_tpl: str, msg_tpl: str) -> None:
+        title = self._format(title_tpl, result)
+        msg = self._format(msg_tpl, result)
+        self._deliver(title, msg, "toast")

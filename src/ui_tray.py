@@ -4,6 +4,7 @@ from __future__ import annotations
 import ctypes
 import os
 import tempfile
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List
@@ -29,6 +30,7 @@ from roi_selector import select_roi_fullscreen
 from roi import RoiRel
 
 from notify import Notifier, NotifySettings, VALID_NOTIFY_MODES
+from sleep_reminder import SleepReminder, SleepReminderConfig, normalize_bed_time
 from capture import capture_to_template, grab_profile_roi_bgr
 from config_store import load_config, save_config
 
@@ -92,7 +94,24 @@ class TrayApp:
         self._notify_settings = NotifySettings(title_tpl=title_tpl, msg_tpl=msg_tpl, mode=mode)
         self._notifier = Notifier(APP_NAME, self._profile, self._notify_settings)
 
+        self._sleep_reminder = SleepReminder(
+            SleepReminderConfig(
+                enabled=bool(self._cfg.get("sleep_reminder_enabled", True)),
+                bed_time=str(self._cfg.get("sleep_bed_time", "22:00")).strip() or "22:00",
+                stop_after_bed_time=bool(self._cfg.get("sleep_stop_after_bed_time", True)),
+                auto_start_detection=bool(self._cfg.get("sleep_auto_start_detection", True)),
+                title_tpl=str(self._cfg.get("sleep_title_tpl", "{game} 睡觉提醒")).strip() or "{game} 睡觉提醒",
+                msg_tpl=str(self._cfg.get("sleep_msg_tpl", "已经到休息时间了，这把结束后就下机。")).strip()
+                or "已经到休息时间了，这把结束后就下机。",
+            )
+        )
+
         self._detector = Detector(det_cfg, self._profile, on_match=self._on_match)
+        self._sleep_window_active = False
+        self._sleep_monitor_stop = threading.Event()
+        self._sleep_monitor_thread = threading.Thread(target=self._sleep_monitor_loop, daemon=True)
+        self._refresh_sleep_window_state()
+        self._sleep_monitor_thread.start()
 
         icon_path = resolve_path("assets/icon.ico")
         try:
@@ -128,7 +147,22 @@ class TrayApp:
 
     # ---------- Detector callback ----------
     def _on_match(self, result: MatchResult) -> None:
-        self._notifier.notify(result)
+        if self._sleep_reminder.is_active_now(self._profile):
+            cfg = self._sleep_reminder.cfg
+            self._notifier.notify_sleep(result, cfg.title_tpl, cfg.msg_tpl)
+        else:
+            self._notifier.notify(result)
+
+    # ---------- sleep reminder ----------
+    def _refresh_sleep_window_state(self, force_auto_start: bool = False) -> None:
+        active = self._sleep_reminder.is_active_now(self._profile)
+        if active and (force_auto_start or not self._sleep_window_active) and self._sleep_reminder.should_auto_start_detection(self._profile):
+            self._detector.start()
+        self._sleep_window_active = active
+
+    def _sleep_monitor_loop(self) -> None:
+        while not self._sleep_monitor_stop.wait(15.0):
+            self._refresh_sleep_window_state()
 
     # ---------- persistence ----------
     def _persist(self) -> None:
@@ -140,6 +174,13 @@ class TrayApp:
         self._cfg["title_tpl"] = self._notify_settings.title_tpl
         self._cfg["msg_tpl"] = self._notify_settings.msg_tpl
         self._cfg["notify_mode"] = self._notify_settings.mode
+        sleep_cfg = self._sleep_reminder.cfg
+        self._cfg["sleep_reminder_enabled"] = sleep_cfg.enabled
+        self._cfg["sleep_bed_time"] = sleep_cfg.bed_time
+        self._cfg["sleep_stop_after_bed_time"] = sleep_cfg.stop_after_bed_time
+        self._cfg["sleep_auto_start_detection"] = sleep_cfg.auto_start_detection
+        self._cfg["sleep_title_tpl"] = sleep_cfg.title_tpl
+        self._cfg["sleep_msg_tpl"] = sleep_cfg.msg_tpl
         save_config(self._cfg)
 
     def _rebuild_menu(self) -> None:
@@ -160,6 +201,7 @@ class TrayApp:
         self._profile = self._apply_roi_override(self._profile_base)
         self._detector.set_profile(self._profile)
         self._notifier.set_profile(self._profile)
+        self._refresh_sleep_window_state()
         self._persist()
         self._rebuild_menu()
 
@@ -167,6 +209,7 @@ class TrayApp:
         self._detector.reload_templates()
 
     def _action_quit(self, icon, item) -> None:
+        self._sleep_monitor_stop.set()
         try:
             self._detector.stop()
         except Exception:
@@ -188,6 +231,7 @@ class TrayApp:
             self._profile = self._apply_roi_override(self._profile_base)
             self._detector.set_profile(self._profile)
             self._notifier.set_profile(self._profile)
+            self._refresh_sleep_window_state(force_auto_start=True)
             self._persist()
             self._rebuild_menu()
         return _inner
@@ -236,6 +280,7 @@ class TrayApp:
         self._profile = self._apply_roi_override(self._profile_base)
         self._detector.set_profile(self._profile)
         self._notifier.set_profile(self._profile)
+        self._refresh_sleep_window_state(force_auto_start=True)
 
         self._persist()
         self._rebuild_menu()
@@ -383,6 +428,75 @@ class TrayApp:
         self._persist()
         self._rebuild_menu()
 
+    # ---------- sleep reminder settings ----------
+    def _is_sleep_flag_enabled(self, attr: str):
+        def _inner(_):
+            return bool(getattr(self._sleep_reminder.cfg, attr))
+        return _inner
+
+    def _action_toggle_sleep_flag(self, attr: str):
+        def _inner(icon, item):
+            cfg = self._sleep_reminder.cfg
+            setattr(cfg, attr, not bool(getattr(cfg, attr)))
+            self._refresh_sleep_window_state(force_auto_start=True)
+            self._persist()
+            self._rebuild_menu()
+        return _inner
+
+    def _action_set_sleep_bed_time(self, icon, item) -> None:
+        cfg = self._sleep_reminder.cfg
+        value = self._dlg.ask_str("设置睡觉时间", "请输入 HH:MM，例如 22:00", cfg.bed_time)
+        if value is None:
+            return
+        try:
+            cfg.bed_time = normalize_bed_time(value)
+        except ValueError:
+            self._dlg.info("时间格式错误", "请输入 24 小时制时间，例如 22:00。")
+            return
+        self._refresh_sleep_window_state(force_auto_start=True)
+        self._persist()
+        self._rebuild_menu()
+
+    def _action_set_sleep_lead_minutes(self, icon, item) -> None:
+        value = self._dlg.ask_float(
+            "设置提前提醒时间",
+            f"{self._profile_base.display_name} 提前提醒分钟数",
+            float(self._profile_base.sleep_lead_minutes),
+        )
+        if value is None:
+            return
+
+        profile = replace(self._profile_base, sleep_lead_minutes=max(0, int(value)))
+        try:
+            save_profile(profile)
+        except Exception as e:
+            self._dlg.info("保存失败", repr(e))
+            return
+
+        self._profiles = [profile if p.id == profile.id else p for p in self._profiles]
+        self._profile_base = profile
+        self._profile = self._apply_roi_override(profile)
+        self._detector.set_profile(self._profile)
+        self._notifier.set_profile(self._profile)
+        self._refresh_sleep_window_state(force_auto_start=True)
+        self._persist()
+        self._rebuild_menu()
+
+    def _action_edit_sleep_text(self, icon, item) -> None:
+        cfg = self._sleep_reminder.cfg
+        title = self._dlg.ask_str("编辑睡觉提醒标题", "例如：{game} 睡觉提醒", cfg.title_tpl)
+        if title is None:
+            return
+        msg = self._dlg.ask_str("编辑睡觉提醒正文", "例如：已经到休息时间了，这把结束后就下机。", cfg.msg_tpl)
+        if msg is None:
+            return
+        if title.strip():
+            cfg.title_tpl = title.strip()
+        if msg.strip():
+            cfg.msg_tpl = msg.strip()
+        self._persist()
+        self._rebuild_menu()
+
     # ---------- build menu ----------
     def _build_menu(self) -> pystray.Menu:
         # profiles menu includes "新建游戏..."
@@ -419,6 +533,32 @@ class TrayApp:
             pystray.MenuItem("只响铃", self._action_set_mode("sound"), checked=self._is_mode("sound"), radio=True),
         )
 
+        sleep_cfg = self._sleep_reminder.cfg
+        sleep_menu = pystray.Menu(
+            pystray.MenuItem(
+                "启用睡觉提醒",
+                self._action_toggle_sleep_flag("enabled"),
+                checked=self._is_sleep_flag_enabled("enabled"),
+            ),
+            pystray.MenuItem(f"睡觉时间={sleep_cfg.bed_time}", self._action_set_sleep_bed_time),
+            pystray.MenuItem(
+                f"当前游戏提前={self._profile_base.sleep_lead_minutes}分钟",
+                self._action_set_sleep_lead_minutes,
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "到点后停止睡觉提醒",
+                self._action_toggle_sleep_flag("stop_after_bed_time"),
+                checked=self._is_sleep_flag_enabled("stop_after_bed_time"),
+            ),
+            pystray.MenuItem(
+                "进入时间窗自动启动检测",
+                self._action_toggle_sleep_flag("auto_start_detection"),
+                checked=self._is_sleep_flag_enabled("auto_start_detection"),
+            ),
+            pystray.MenuItem("编辑睡觉提醒文本…", self._action_edit_sleep_text),
+        )
+
         settings_menu = pystray.Menu(
             pystray.MenuItem(f"threshold={self._detector.cfg.threshold:.3f}", self._action_set_threshold),
             pystray.MenuItem(f"hysteresis={self._detector.cfg.hysteresis:.3f}", self._action_set_hysteresis),
@@ -427,6 +567,7 @@ class TrayApp:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("提醒方式", mode_menu),
             pystray.MenuItem("编辑通知文本…", self._action_edit_text),
+            pystray.MenuItem("睡觉提醒", sleep_menu),
         )
 
         return pystray.Menu(
