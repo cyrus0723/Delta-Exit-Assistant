@@ -24,6 +24,7 @@ class GameProfile:
     display_name: str
     roi_rel: RoiRel
     templates: List[TemplateItem]
+    sleep_lead_minutes: int = 30
 
 
 def resolve_path(rel_path: str) -> str:
@@ -46,6 +47,7 @@ def _parse_profile(data: dict) -> Optional[GameProfile]:
     try:
         pid = str(data["id"]).strip()
         display_name = str(data.get("display_name", pid)).strip()
+        sleep_lead_minutes = max(0, int(data.get("sleep_lead_minutes", 30)))
 
         rr = data["roi_rel"]
         roi_rel = RoiRel(
@@ -65,7 +67,13 @@ def _parse_profile(data: dict) -> Optional[GameProfile]:
         if not pid:
             return None
 
-        return GameProfile(id=pid, display_name=display_name, roi_rel=roi_rel, templates=tpls)
+        return GameProfile(
+            id=pid,
+            display_name=display_name,
+            roi_rel=roi_rel,
+            templates=tpls,
+            sleep_lead_minutes=sleep_lead_minutes,
+        )
     except Exception:
         return None
 
@@ -113,6 +121,7 @@ def save_profile(profile: GameProfile) -> Path:
     data = {
         "id": profile.id,
         "display_name": profile.display_name,
+        "sleep_lead_minutes": profile.sleep_lead_minutes,
         "roi_rel": {"x": profile.roi_rel.x, "y": profile.roi_rel.y, "w": profile.roi_rel.w, "h": profile.roi_rel.h},
         "templates": [{"id": t.id, "label": t.label, "path": t.path} for t in profile.templates],
     }
