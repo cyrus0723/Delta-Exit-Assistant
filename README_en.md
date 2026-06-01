@@ -80,8 +80,8 @@ pip install -r requirements.txt
 Package as a writable onedir ZIP distribution:
 
 ```powershell
-python -m PyInstaller --clean --noconfirm -w --onedir --paths "src" `
-  "src/app.py" --name "Delta-Exit-Assistant" --add-data "assets;assets"
+python -m PyInstaller --clean --noconfirm -w --onedir --contents-directory "." --paths "src" `
+  "src/app.py" --name "Delta-Exit-Assistant" --icon "assets/icon.ico" --add-data "assets;assets"
 ```
 
 Extract releases to a normal writable folder so the application can save `config.json`, profiles, and templates.

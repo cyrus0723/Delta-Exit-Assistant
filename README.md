@@ -283,8 +283,8 @@ pip install -r requirements.txt
 在项目根目录运行：
 
 ```powershell
-python -m PyInstaller --clean --noconfirm -w --onedir --paths "src" `
-  "src/app.py" --name "Delta-Exit-Assistant" --add-data "assets;assets"
+python -m PyInstaller --clean --noconfirm -w --onedir --contents-directory "." --paths "src" `
+  "src/app.py" --name "Delta-Exit-Assistant" --icon "assets/icon.ico" --add-data "assets;assets"
 ```
 
 打包结果在：

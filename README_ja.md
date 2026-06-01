@@ -80,8 +80,8 @@ pip install -r requirements.txt
 書込可能な onedir ZIP 配布としてパッケージ化します。
 
 ```powershell
-python -m PyInstaller --clean --noconfirm -w --onedir --paths "src" `
-  "src/app.py" --name "Delta-Exit-Assistant" --add-data "assets;assets"
+python -m PyInstaller --clean --noconfirm -w --onedir --contents-directory "." --paths "src" `
+  "src/app.py" --name "Delta-Exit-Assistant" --icon "assets/icon.ico" --add-data "assets;assets"
 ```
 
 `config.json`、Profile、テンプレート画像を保存できるよう、通常の書込可能なフォルダーに展開してください。
