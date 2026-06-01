@@ -25,7 +25,11 @@ def _normalize_rect(x0: int, y0: int, x1: int, y1: int) -> Tuple[int, int, int, 
     return left, top, right, bottom
 
 
-def select_roi_fullscreen(root: tk.Tk, title: str = "选择检测区域 ROI") -> Optional[RoiRel]:
+def select_roi_fullscreen(
+    root: tk.Tk,
+    title: str = "选择检测区域 ROI",
+    instruction: str = "拖拽框选 ROI（Enter 确认 / ESC 取消）",
+) -> Optional[RoiRel]:
     screen_w = root.winfo_screenwidth()
     screen_h = root.winfo_screenheight()
 
@@ -46,7 +50,7 @@ def select_roi_fullscreen(root: tk.Tk, title: str = "选择检测区域 ROI") ->
     canvas.create_text(
         screen_w // 2,
         30,
-        text="拖拽框选 ROI（Enter 确认 / ESC 取消）",
+        text=instruction,
         fill="white",
         font=("Microsoft YaHei", 16),
     )
