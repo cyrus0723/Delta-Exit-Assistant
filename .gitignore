@@ -1,6 +1,8 @@
 # PyInstaller
 /build/
 /dist/
+/build-onefile/
+/dist-onefile/
 *.spec
 
 # Python cache

@@ -298,6 +298,15 @@ dist/Delta-Exit-Assistant/
 > 如果你后续使用 Inno Setup 打包安装器，把整个 `dist/Delta-Exit-Assistant` 作为安装目录即可。
 > 当前发布方式建议保持 ZIP 解压即用，并解压到普通可写目录，以便保存 `config.json`、Profile 和模板图片。
 
+如果需要一个更直观的单文件启动入口，可额外构建 onefile 版本：
+
+```powershell
+python -m PyInstaller --clean --noconfirm -w --onefile --paths "src" `
+  "src/app.py" --name "Delta-Exit-Assistant" --icon "assets/icon.ico"
+```
+
+将生成的 `Delta-Exit-Assistant.exe` 与外置 `assets/` 放在同一目录。用户只需双击 exe；`assets/` 仍需保留，以便读取 Profile 并保存自定义模板。
+
 ---
 
 ## 📋 开发计划

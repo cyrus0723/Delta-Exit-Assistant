@@ -86,6 +86,15 @@ python -m PyInstaller --clean --noconfirm -w --onedir --contents-directory "." -
 
 `config.json`、Profile、テンプレート画像を保存できるよう、通常の書込可能なフォルダーに展開してください。
 
+単一ファイルの起動入口が必要な場合は、追加で onefile 版をビルドします。
+
+```powershell
+python -m PyInstaller --clean --noconfirm -w --onefile --paths "src" `
+  "src/app.py" --name "Delta-Exit-Assistant" --icon "assets/icon.ico"
+```
+
+生成された `Delta-Exit-Assistant.exe` と外部 `assets/` フォルダーを同じディレクトリに置きます。ユーザーは exe をダブルクリックするだけで起動できます。Profile の読込とカスタムテンプレート保存のため、`assets/` は保持してください。
+
 ## 開発予定
 
 * ゲームを表示するモニターを明示的に選択できるマルチモニター対応。現在のバージョンはプライマリモニターのみを取得します。

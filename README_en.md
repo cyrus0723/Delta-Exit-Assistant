@@ -86,6 +86,15 @@ python -m PyInstaller --clean --noconfirm -w --onedir --contents-directory "." -
 
 Extract releases to a normal writable folder so the application can save `config.json`, profiles, and templates.
 
+For a simpler single-file launch entry, build an additional onefile executable:
+
+```powershell
+python -m PyInstaller --clean --noconfirm -w --onefile --paths "src" `
+  "src/app.py" --name "Delta-Exit-Assistant" --icon "assets/icon.ico"
+```
+
+Place the generated `Delta-Exit-Assistant.exe` next to the external `assets/` folder. Users only need to double-click the executable. Keep `assets/` so profiles can be read and custom templates can be saved.
+
 ## Roadmap
 
 * Multi-monitor support with explicit game-monitor selection. The current version captures the primary monitor only.
