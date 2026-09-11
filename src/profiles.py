@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from roi import RoiRel
+from alert_timer import DEFAULT_ESTIMATED_DURATION_MIN, normalize_duration_min
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class TemplateItem:
 class GameProfile:
     id: str
     display_name: str
+    estimated_duration_min: int
     roi_rel: RoiRel
     templates: List[TemplateItem]
 
@@ -93,6 +95,9 @@ def load_profiles_from_assets() -> List[GameProfile]:
             try:
                 pid = str(data["id"]).strip()
                 display_name = str(data.get("display_name", pid)).strip()
+                estimated_duration_min = normalize_duration_min(
+                    data.get("estimated_duration_min", DEFAULT_ESTIMATED_DURATION_MIN)
+                )
 
                 rr = data["roi_rel"]
                 roi_rel = RoiRel(
@@ -116,6 +121,7 @@ def load_profiles_from_assets() -> List[GameProfile]:
                     GameProfile(
                         id=pid,
                         display_name=display_name,
+                        estimated_duration_min=estimated_duration_min,
                         roi_rel=roi_rel,
                         templates=tpls,
                     )
@@ -135,6 +141,7 @@ def fallback_delta_profile_from_legacy_config(cfg: dict) -> GameProfile:
     return GameProfile(
         id="delta",
         display_name="Delta",
+        estimated_duration_min=DEFAULT_ESTIMATED_DURATION_MIN,
         roi_rel=roi_rel,
         templates=[
             TemplateItem(id="delta_success", label="撤离成功", path="assets/templates/delta/success.png"),

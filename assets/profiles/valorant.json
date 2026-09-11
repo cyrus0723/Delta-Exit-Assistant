@@ -1,6 +1,7 @@
 {
   "id": "valorant",
   "display_name": "无畏契约",
+  "estimated_duration_min": 40,
   "roi_rel": { "x": 0.340104, "y": 0.301852, "w": 0.327083, "h": 0.400926 },
   "templates": [
     { "id": "valorant_win",  "label": "胜利", "path": "assets/templates/valorant/win.png" },

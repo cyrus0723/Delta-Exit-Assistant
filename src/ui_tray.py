@@ -5,6 +5,7 @@ import ctypes
 import os
 import tempfile
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -24,6 +25,13 @@ from ui_dialogs import TkDialogService
 from notify import Notifier, NotifySettings, VALID_NOTIFY_MODES
 from capture import capture_to_template, grab_profile_roi_bgr
 from config_store import load_config, save_config
+from alert_timer import (
+    DEFAULT_ESTIMATED_DURATION_MIN,
+    alert_window,
+    is_alert_window_open,
+    normalize_duration_min,
+    parse_target_time,
+)
 
 from roi_tuner import (
     RoiTuner,
@@ -64,6 +72,12 @@ class TrayApp:
         # apply roi override if exists
         self._profile: GameProfile = self._apply_roi_override(self._profile_base)
 
+        # Timer settings. Per-game overrides stay in config.json so packaged
+        # profile files remain read-only defaults.
+        self._timer_enabled = bool(self._cfg.get("timer_enabled", False))
+        raw_target_time = str(self._cfg.get("timer_target_time", "08:00"))
+        self._timer_target_time = parse_target_time(raw_target_time) or parse_target_time("08:00")
+
         # detector config
         det_cfg = DetectorConfig(
             threshold=float(self._cfg.get("threshold", 0.82)),
@@ -83,7 +97,12 @@ class TrayApp:
         self._notifier = Notifier(APP_NAME, self._profile, self._notify_settings)
 
         # detector
-        self._detector = Detector(det_cfg, self._profile, on_match=self._on_match)
+        self._detector = Detector(
+            det_cfg,
+            self._profile,
+            on_match=self._on_match,
+            alerts_allowed=self._alerts_allowed_for_profile,
+        )
 
         # tray icon
         icon_path = resolve_resource_path("assets/icon.ico")
@@ -133,6 +152,27 @@ class TrayApp:
         self._notifier.notify(result)
 
     # -------------------------
+    # Timer helpers
+    # -------------------------
+    def _game_duration_min(self, profile: GameProfile) -> int:
+        overrides = self._cfg.get("timer_game_durations")
+        if isinstance(overrides, dict) and profile.id in overrides:
+            return normalize_duration_min(overrides[profile.id], profile.estimated_duration_min)
+        return normalize_duration_min(profile.estimated_duration_min, DEFAULT_ESTIMATED_DURATION_MIN)
+
+    def _alerts_allowed_for_profile(self, profile: GameProfile) -> bool:
+        if not self._timer_enabled:
+            return True
+        return is_alert_window_open(
+            datetime.now(), self._timer_target_time, self._game_duration_min(profile)
+        )
+
+    def _timer_window_label(self) -> str:
+        duration = self._game_duration_min(self._profile_base)
+        window = alert_window(datetime.now(), self._timer_target_time, duration)
+        return f"{window.opens_at:%H:%M} 起（目标 {window.target_at:%H:%M}）"
+
+    # -------------------------
     # Persistence + menu refresh
     # -------------------------
     def _persist(self) -> None:
@@ -144,6 +184,8 @@ class TrayApp:
         self._cfg["title_tpl"] = self._notify_settings.title_tpl
         self._cfg["msg_tpl"] = self._notify_settings.msg_tpl
         self._cfg["notify_mode"] = self._notify_settings.mode
+        self._cfg["timer_enabled"] = self._timer_enabled
+        self._cfg["timer_target_time"] = self._timer_target_time.strftime("%H:%M")
         save_config(self._cfg)
 
     def _rebuild_menu(self) -> None:
@@ -225,6 +267,55 @@ class TrayApp:
         if v is None:
             return
         self._detector.cfg.scan_interval_sec = max(0.05, float(v))
+        self._persist()
+        self._rebuild_menu()
+
+    # -------------------------
+    # Actions: timer
+    # -------------------------
+    def _is_timer_enabled(self, item: pystray.MenuItem) -> bool:
+        return self._timer_enabled
+
+    def _action_toggle_timer(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        self._timer_enabled = not self._timer_enabled
+        self._persist()
+        self._rebuild_menu()
+
+    def _action_set_timer_target(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        raw = self._dlg.ask_str(
+            "设置目标时间",
+            "使用 24 小时制 HH:MM，例如 08:00。\n"
+            "提醒会从目标时间减去当前游戏大概时长时开始。",
+            self._timer_target_time.strftime("%H:%M"),
+        )
+        if raw is None:
+            return
+        target = parse_target_time(raw)
+        if target is None:
+            self._dlg.info("时间格式错误", "请输入有效的 24 小时制时间，例如 08:00。")
+            return
+        self._timer_target_time = target
+        self._persist()
+        self._rebuild_menu()
+
+    def _action_set_game_duration(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        profile = self._profile_base
+        current = self._game_duration_min(profile)
+        value = self._dlg.ask_float(
+            "设置游戏大概时长",
+            f"{profile.display_name} 的单局大概时长（分钟，0 ~ 1440）。\n"
+            "程序会从目标时间减去该时长时开始允许结算提醒。",
+            float(current),
+        )
+        if value is None:
+            return
+
+        duration = normalize_duration_min(value, current)
+        overrides = self._cfg.get("timer_game_durations")
+        if not isinstance(overrides, dict):
+            overrides = {}
+            self._cfg["timer_game_durations"] = overrides
+        overrides[profile.id] = duration
         self._persist()
         self._rebuild_menu()
 
@@ -372,6 +463,23 @@ class TrayApp:
             pystray.MenuItem("只响铃", self._action_set_mode("sound"), checked=self._is_mode("sound"), radio=True),
         )
 
+        timer_menu = pystray.Menu(
+            pystray.MenuItem("启用计时提醒", self._action_toggle_timer, checked=self._is_timer_enabled),
+            pystray.MenuItem(
+                f"目标时间 = {self._timer_target_time:%H:%M}", self._action_set_timer_target
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                f"当前游戏大概时长 = {self._game_duration_min(self._profile_base)} 分钟",
+                self._action_set_game_duration,
+            ),
+            pystray.MenuItem(
+                f"当前提醒窗口：{self._timer_window_label()}",
+                lambda icon, item: None,
+                enabled=False,
+            ),
+        )
+
         settings_menu = pystray.Menu(
             pystray.MenuItem(f"匹配阈值 threshold = {self._detector.cfg.threshold:.3f}", self._action_set_threshold),
             pystray.MenuItem(f"回落差值 hysteresis = {self._detector.cfg.hysteresis:.3f}", self._action_set_hysteresis),
@@ -379,6 +487,7 @@ class TrayApp:
             pystray.MenuItem(f"扫描间隔 scan_interval = {self._detector.cfg.scan_interval_sec:.2f}s", self._action_set_interval),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("提醒方式（弹窗/响铃）", mode_menu),
+            pystray.MenuItem("计时提醒", timer_menu),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("编辑通知文本…", self._action_edit_text),
             pystray.MenuItem("发送测试通知", self._action_test_notify),

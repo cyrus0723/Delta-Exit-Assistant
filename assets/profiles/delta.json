@@ -1,6 +1,7 @@
 {
   "id": "delta",
   "display_name": "三角洲行动",
+  "estimated_duration_min": 30,
   "roi_rel": { "x": 0.078125, "y": 0.138889, "w": 0.260417, "h": 0.148148 },
   "templates": [
     { "id": "delta_success", "label": "撤离成功", "path": "assets/templates/delta/success.png" },

@@ -58,12 +58,14 @@ class Detector:
         cfg: DetectorConfig,
         profile: GameProfile,
         on_match: Callable[[MatchResult], None],
+        alerts_allowed: Optional[Callable[[GameProfile], bool]] = None,
     ):
         self.cfg = cfg
         self._profile_lock = threading.Lock()
         self._profile: GameProfile = profile
 
         self._on_match = on_match
+        self._alerts_allowed = alerts_allowed or (lambda _profile: True)
 
         self._stop_evt = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -169,7 +171,12 @@ class Detector:
                 roi_bgr = self._grab_roi(roi_px)
                 best = self._best_match(roi_bgr)
 
-                if best is None:
+                # Keep scanning before the timer window, but do not consume the
+                # armed state. A settlement screen already visible when the
+                # window opens can therefore alert immediately.
+                if not self._alerts_allowed(profile):
+                    self._armed = True
+                elif best is None:
                     # 匹配不到：重新武装
                     self._armed = True
                 else:
