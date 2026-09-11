@@ -19,6 +19,7 @@ class NotifySettings:
     title_tpl: str = "{game} 结算检测"
     msg_tpl: str = "{label}（score={score:.3f}）"
     mode: str = "both"  # both/toast/sound
+    sound_path: str = ""  # runtime-relative path to a custom WAV file
 
 
 class Notifier:
@@ -53,7 +54,22 @@ class Notifier:
         toast.show()
 
     def _beep(self) -> None:
+        sound_path = (self.settings.sound_path or "").strip()
+        if sound_path:
+            try:
+                path = resolve_resource_path(sound_path)
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                return
+            except Exception as e:
+                print("Custom sound error:", repr(e))
         winsound.MessageBeep(winsound.MB_ICONASTERISK)
+
+    def play_sound(self) -> None:
+        """Play the configured sound, falling back to the system beep."""
+        try:
+            self._beep()
+        except Exception:
+            pass
 
     def notify(self, result: MatchResult) -> None:
         title = self._format(self.settings.title_tpl, result)
@@ -70,7 +86,4 @@ class Notifier:
                 print("Toast error:", repr(e))
 
         if mode in ("both", "sound"):
-            try:
-                self._beep()
-            except Exception:
-                pass
+            self.play_sound()

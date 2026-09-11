@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import ctypes
 import os
+import shutil
 import tempfile
+import wave
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +29,7 @@ from profiles import (
 from ui_dialogs import TkDialogService
 from notify import Notifier, NotifySettings, VALID_NOTIFY_MODES
 from capture import capture_to_template, grab_profile_roi_bgr
-from config_store import load_config, save_config
+from config_store import exe_dir, load_config, save_config
 from alert_timer import (
     DEFAULT_ESTIMATED_DURATION_MIN,
     alert_window,
@@ -96,8 +98,11 @@ class TrayApp:
         mode = str(self._cfg.get("notify_mode", "both")).strip().lower()
         if mode not in VALID_NOTIFY_MODES:
             mode = "both"
+        sound_path = str(self._cfg.get("sound_path", "")).strip()
 
-        self._notify_settings = NotifySettings(title_tpl=title_tpl, msg_tpl=msg_tpl, mode=mode)
+        self._notify_settings = NotifySettings(
+            title_tpl=title_tpl, msg_tpl=msg_tpl, mode=mode, sound_path=sound_path
+        )
         self._notifier = Notifier(APP_NAME, self._profile, self._notify_settings)
 
         # detector
@@ -188,6 +193,7 @@ class TrayApp:
         self._cfg["title_tpl"] = self._notify_settings.title_tpl
         self._cfg["msg_tpl"] = self._notify_settings.msg_tpl
         self._cfg["notify_mode"] = self._notify_settings.mode
+        self._cfg["sound_path"] = self._notify_settings.sound_path
         self._cfg["timer_enabled"] = self._timer_enabled
         self._cfg["timer_target_time"] = self._timer_target_time.strftime("%H:%M")
         save_config(self._cfg)
@@ -436,6 +442,45 @@ class TrayApp:
     def _action_test_notify(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         self._notifier.notify(MatchResult(label="测试成功", template_id="test", score=0.999))
 
+    def _action_select_sound(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        selected = self._dlg.ask_open_file("选择提示音（仅支持 WAV）", [("WAV 音频", "*.wav"), ("所有文件", "*.*")])
+        if not selected:
+            return
+        source = Path(selected)
+        if source.suffix.lower() != ".wav":
+            self._dlg.info("提示音设置", "请选择 WAV 格式的音频文件。")
+            return
+        try:
+            if source.stat().st_size > 10 * 1024 * 1024:
+                self._dlg.info("提示音设置", "音频文件不能超过 10 MB。")
+                return
+            try:
+                with wave.open(str(source), "rb"):
+                    pass
+            except (wave.Error, EOFError, OSError):
+                self._dlg.info("提示音设置", "所选文件不是有效的 WAV 音频。")
+                return
+            sounds_dir = exe_dir() / "sounds"
+            sounds_dir.mkdir(parents=True, exist_ok=True)
+            target = sounds_dir / "custom.wav"
+            temp_target = sounds_dir / "custom.wav.tmp"
+            shutil.copyfile(source, temp_target)
+            temp_target.replace(target)
+            self._notify_settings.sound_path = "sounds/custom.wav"
+            self._persist()
+            self._rebuild_menu()
+            self._notifier.play_sound()
+        except Exception as e:
+            self._dlg.info("提示音设置失败", repr(e))
+
+    def _action_reset_sound(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        self._notify_settings.sound_path = ""
+        self._persist()
+        self._rebuild_menu()
+
+    def _action_test_sound(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        self._notifier.play_sound()
+
     # -------------------------
     # Actions: capture template
     # -------------------------
@@ -563,6 +608,14 @@ class TrayApp:
             pystray.MenuItem(f"扫描间隔 scan_interval = {self._detector.cfg.scan_interval_sec:.2f}s", self._action_set_interval),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("提醒方式（弹窗/响铃）", mode_menu),
+            pystray.MenuItem(
+                f"当前提示音：{Path(self._notify_settings.sound_path).name if self._notify_settings.sound_path else '系统默认'}",
+                pystray.Menu(
+                    pystray.MenuItem("选择提示音…", self._action_select_sound),
+                    pystray.MenuItem("测试当前提示音", self._action_test_sound),
+                    pystray.MenuItem("恢复系统默认提示音", self._action_reset_sound),
+                ),
+            ),
             pystray.MenuItem("计时提醒", timer_menu),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("编辑通知文本…", self._action_edit_text),

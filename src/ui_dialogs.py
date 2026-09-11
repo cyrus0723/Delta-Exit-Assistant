@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import filedialog, messagebox, simpledialog
 
 
 @dataclass
@@ -91,3 +91,10 @@ class TkDialogService:
 
         v = self._call(_f)
         return None if v is None else str(v)
+
+    def ask_open_file(self, title: str, filetypes: list[tuple[str, str]]) -> Optional[str]:
+        def _f():
+            return filedialog.askopenfilename(title=title, filetypes=filetypes, parent=self._root)
+
+        v = self._call(_f)
+        return None if not v else str(v)
