@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,14 +77,17 @@ def _safe_read_json(path: Path) -> Optional[dict]:
 
 def load_profiles_from_assets() -> List[GameProfile]:
     """
-    Load profiles from:
-      1) runtime_root/assets/profiles/*.json (if exists)  [optional override]
-      2) resource_root/assets/profiles/*.json            [bundled]
+    Load bundled profiles first, then merge runtime profiles by id. This keeps
+    built-in games available when a user adds just one custom profile beside a
+    one-file executable.
     """
-    profiles: List[GameProfile] = []
+    by_id: dict[str, GameProfile] = {}
 
-    # first runtime override
-    for base in [runtime_root(), resource_root()]:
+    bases = [resource_root()]
+    if runtime_root() != resource_root():
+        bases.append(runtime_root())
+
+    for base in bases:
         prof_dir = base / "assets" / "profiles"
         if not prof_dir.exists():
             continue
@@ -117,23 +122,56 @@ def load_profiles_from_assets() -> List[GameProfile]:
                 if not pid or not tpls:
                     continue
 
-                profiles.append(
-                    GameProfile(
-                        id=pid,
-                        display_name=display_name,
-                        estimated_duration_min=estimated_duration_min,
-                        roi_rel=roi_rel,
-                        templates=tpls,
-                    )
+                by_id[pid] = GameProfile(
+                    id=pid,
+                    display_name=display_name,
+                    estimated_duration_min=estimated_duration_min,
+                    roi_rel=roi_rel,
+                    templates=tpls,
                 )
             except Exception:
                 continue
 
-        # 如果 runtime 里找到了 profiles，就优先用 runtime，不再混用 bundle
-        if profiles and base == runtime_root():
-            return profiles
+    return list(by_id.values())
 
-    return profiles
+
+
+def normalize_profile_id(name: str) -> str:
+    """Create a stable, filesystem-safe id for a custom game profile."""
+    normalized = re.sub(r"\s+", "_", (name or "").strip().lower())
+    normalized = re.sub(r"[^a-z0-9_]+", "", normalized).strip("_")
+    if normalized:
+        return normalized
+    digest = hashlib.sha1(name.strip().encode("utf-8")).hexdigest()[:8]
+    return f"game_{digest}"
+
+
+def profile_file_path(profile_id: str) -> Path:
+    return runtime_root() / "assets" / "profiles" / f"{profile_id}.json"
+
+
+def save_profile(profile: GameProfile) -> Path:
+    """Persist a custom profile beside the executable for future runs."""
+    out = profile_file_path(profile.id)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "id": profile.id,
+        "display_name": profile.display_name,
+        "estimated_duration_min": profile.estimated_duration_min,
+        "roi_rel": {
+            "x": profile.roi_rel.x,
+            "y": profile.roi_rel.y,
+            "w": profile.roi_rel.w,
+            "h": profile.roi_rel.h,
+        },
+        "templates": [
+            {"id": template.id, "label": template.label, "path": template.path}
+            for template in profile.templates
+        ],
+    }
+    with out.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return out
 
 
 def fallback_delta_profile_from_legacy_config(cfg: dict) -> GameProfile:

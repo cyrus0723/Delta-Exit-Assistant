@@ -109,9 +109,14 @@ class Detector:
         profile = self.get_profile()
         new_tpls: Dict[str, Tuple[str, np.ndarray]] = {}
         for t in profile.templates:
-            abs_path = resolve_resource_path(t.path)
-            gray = load_gray_compat(abs_path)
-            new_tpls[t.id] = (t.label, gray)
+            try:
+                abs_path = resolve_resource_path(t.path)
+                gray = load_gray_compat(abs_path)
+                new_tpls[t.id] = (t.label, gray)
+            except Exception as e:
+                # A newly created game has empty template slots until the user
+                # captures its first settlement screen. Keep the app usable.
+                print(f"Skipping template {t.id}: {e!r}")
         self._tpls = new_tpls
 
     # -------------------------

@@ -6,6 +6,9 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from alert_timer import alert_window, is_alert_window_open, normalize_duration_min, parse_target_time
+from detector import Detector, DetectorConfig
+from profiles import GameProfile, TemplateItem, normalize_profile_id
+from roi import RoiRel
 
 
 class TimerTests(unittest.TestCase):
@@ -36,6 +39,27 @@ class TimerTests(unittest.TestCase):
     def test_duration_is_bounded(self) -> None:
         self.assertEqual(normalize_duration_min(-1), 0)
         self.assertEqual(normalize_duration_min(2000), 1440)
+
+    def test_custom_profile_id_is_safe_for_chinese_game_name(self) -> None:
+        profile_id = normalize_profile_id("自定义游戏")
+        self.assertRegex(profile_id, r"^game_[0-9a-f]{8}$")
+
+    def test_detector_accepts_empty_custom_template_slots(self) -> None:
+        profile = GameProfile(
+            id="custom_game",
+            display_name="Custom Game",
+            estimated_duration_min=30,
+            roi_rel=RoiRel(x=0.0, y=0.0, w=0.1, h=0.1),
+            templates=[
+                TemplateItem(
+                    id="custom_game_win",
+                    label="胜利",
+                    path="assets/templates/custom_game/not_yet_captured.png",
+                )
+            ],
+        )
+        detector = Detector(DetectorConfig(), profile, on_match=lambda result: None)
+        self.assertEqual(detector._tpls, {})
 
 
 if __name__ == "__main__":

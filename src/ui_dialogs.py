@@ -62,12 +62,21 @@ class TkDialogService:
         job.done.wait(timeout=timeout)
         return job.out.get("value", None)
 
+    def run_in_tk(self, fn: Callable[[tk.Tk], Any], timeout: float = 120.0) -> Any:
+        return self._call(lambda: fn(self._root), timeout=timeout)
+
     def info(self, title: str, msg: str) -> None:
         def _f():
             messagebox.showinfo(title, msg, parent=self._root)
             return None
 
         self._call(_f)
+
+    def confirm(self, title: str, msg: str) -> bool:
+        def _f():
+            return messagebox.askyesno(title, msg, parent=self._root)
+
+        return bool(self._call(_f))
 
     def ask_float(self, title: str, prompt: str, initial: float) -> Optional[float]:
         def _f():

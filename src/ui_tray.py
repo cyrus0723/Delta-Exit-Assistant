@@ -18,8 +18,11 @@ from profiles import (
     TemplateItem,
     fallback_delta_profile_from_legacy_config,
     load_profiles_from_assets,
+    normalize_profile_id,
     pick_profile,
+    profile_file_path,
     resolve_resource_path,
+    save_profile,
 )
 from ui_dialogs import TkDialogService
 from notify import Notifier, NotifySettings, VALID_NOTIFY_MODES
@@ -39,6 +42,7 @@ from roi_tuner import (
     save_roi_override,
     clear_roi_override,
 )
+from roi_selector import select_roi_fullscreen
 
 APP_NAME = "Delta Exit Assistant"
 
@@ -234,6 +238,71 @@ class TrayApp:
             self._persist()
             self._rebuild_menu()
         return _inner
+
+    def _action_refresh_profiles(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        selected_id = self._profile_base.id
+        self._profiles = load_profiles_from_assets()
+        if not self._profiles:
+            self._profiles = [fallback_delta_profile_from_legacy_config(self._cfg)]
+        self._profile_base = pick_profile(self._profiles, selected_id)
+        self._profile = self._apply_roi_override(self._profile_base)
+        self._detector.set_profile(self._profile)
+        self._notifier.set_profile(self._profile)
+        self._persist()
+        self._rebuild_menu()
+
+    def _action_new_game(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        name = self._dlg.ask_str("新建游戏", "请输入游戏名称，例如 OW2 或 Overwatch 2", "")
+        if name is None or not name.strip():
+            return
+
+        display_name = name.strip()
+        profile_id = normalize_profile_id(display_name)
+        profile_path = profile_file_path(profile_id)
+        if profile_path.exists() and not self._dlg.confirm(
+            "已存在同名游戏", f"已存在 {profile_path.name}。是否覆盖其配置？"
+        ):
+            return
+
+        self._dlg.info("选择检测区域", "拖拽框选结算标题或结果文字区域。\n按 Enter 确认，按 Esc 取消。")
+        roi_rel = self._dlg.run_in_tk(
+            lambda root: select_roi_fullscreen(root, f"选择 ROI - {display_name}")
+        )
+        if roi_rel is None:
+            return
+
+        templates = [
+            TemplateItem(id=f"{profile_id}_win", label="胜利", path=f"assets/templates/{profile_id}/win.png"),
+            TemplateItem(id=f"{profile_id}_lose", label="失败", path=f"assets/templates/{profile_id}/lose.png"),
+            TemplateItem(id=f"{profile_id}_draw", label="平局", path=f"assets/templates/{profile_id}/draw.png"),
+        ]
+        profile = GameProfile(
+            id=profile_id,
+            display_name=display_name,
+            estimated_duration_min=DEFAULT_ESTIMATED_DURATION_MIN,
+            roi_rel=roi_rel,
+            templates=templates,
+        )
+
+        try:
+            saved_profile = save_profile(profile)
+            (saved_profile.parent.parent / "templates" / profile_id).mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self._dlg.info("创建失败", repr(e))
+            return
+
+        self._profiles = load_profiles_from_assets()
+        self._profile_base = pick_profile(self._profiles, profile_id)
+        self._profile = self._apply_roi_override(self._profile_base)
+        self._detector.set_profile(self._profile)
+        self._notifier.set_profile(self._profile)
+        self._persist()
+        self._rebuild_menu()
+        self._dlg.info(
+            "创建成功",
+            "已创建游戏配置并切换到该游戏。\n\n"
+            "进入结算界面后，依次选择：\n抓取模板 -> 抓取：胜利 / 失败 / 平局。",
+        )
 
     # -------------------------
     # Actions: tuning detector
@@ -448,6 +517,12 @@ class TrayApp:
     # -------------------------
     def _build_menu(self) -> pystray.Menu:
         profile_items = [
+            pystray.MenuItem("新建游戏…", self._action_new_game),
+            pystray.MenuItem("刷新游戏列表", self._action_refresh_profiles),
+            pystray.Menu.SEPARATOR,
+        ]
+        profile_items.extend(
+            [
             pystray.MenuItem(
                 p.display_name,
                 self._action_select_profile(p.id),
@@ -455,7 +530,8 @@ class TrayApp:
                 radio=True,
             )
             for p in self._profiles
-        ]
+            ]
+        )
 
         mode_menu = pystray.Menu(
             pystray.MenuItem("都要（弹窗 + 响铃）", self._action_set_mode("both"), checked=self._is_mode("both"), radio=True),
