@@ -1,6 +1,7 @@
 # PyInstaller
 /build/
 /dist/
+/release/
 *.spec
 
 # Python cache

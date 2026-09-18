@@ -29,7 +29,8 @@ from profiles import (
 from ui_dialogs import TkDialogService
 from notify import Notifier, NotifySettings, VALID_NOTIFY_MODES
 from capture import capture_to_template, grab_profile_roi_bgr
-from config_store import exe_dir, load_config, save_config
+from app_data import migrate_legacy_user_data, user_data_dir
+from config_store import load_config, save_config
 from alert_timer import (
     DEFAULT_ESTIMATED_DURATION_MIN,
     alert_window,
@@ -64,6 +65,7 @@ enable_dpi_awareness()
 
 class TrayApp:
     def __init__(self) -> None:
+        migrate_legacy_user_data()
         self._cfg: Dict[str, Any] = load_config()
         self._dlg = TkDialogService()
 
@@ -460,7 +462,7 @@ class TrayApp:
             except (wave.Error, EOFError, OSError):
                 self._dlg.info("提示音设置", "所选文件不是有效的 WAV 音频。")
                 return
-            sounds_dir = exe_dir() / "sounds"
+            sounds_dir = user_data_dir() / "sounds"
             sounds_dir.mkdir(parents=True, exist_ok=True)
             target = sounds_dir / "custom.wav"
             temp_target = sounds_dir / "custom.wav.tmp"

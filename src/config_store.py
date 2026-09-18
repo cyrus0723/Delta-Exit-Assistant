@@ -2,26 +2,24 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any, Dict
 
-
-def exe_dir() -> Path:
-    """
-    Same dir as exe when frozen, otherwise project root.
-    """
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
+from app_data import legacy_runtime_dir, user_data_dir
 
 
 def config_path() -> Path:
-    return exe_dir() / "config.json"
+    return user_data_dir() / "config.json"
+
+
+def legacy_config_path() -> Path:
+    return legacy_runtime_dir() / "config.json"
 
 
 def load_config() -> Dict[str, Any]:
     p = config_path()
+    if not p.exists():
+        p = legacy_config_path()
     if not p.exists():
         return {}
     try:
@@ -34,7 +32,13 @@ def load_config() -> Dict[str, Any]:
 def save_config(cfg: Dict[str, Any]) -> None:
     p = config_path()
     try:
-        with p.open("w", encoding="utf-8") as f:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        temp = p.with_name(f"{p.name}.tmp")
+        with temp.open("w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+        temp.replace(p)
+    except OSError:
+        return
+    except TypeError:
+        # Keep the previous behavior of ignoring unserializable config values.
+        return

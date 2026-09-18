@@ -156,9 +156,11 @@ h：ROI 高度占屏幕高度比例
 进入游戏结算界面（胜利/失败/平局）
 托盘 → 抓取模板 → 选择对应项（例如“抓取：胜利”）
 
-模板保存到：
+用户自己录入的模板保存到：
 
-assets/templates/<game>/<xxx>.png（优先写在 exe 同级，可持久）
+`%LOCALAPPDATA%\\DeltaExitAssistant\\assets\\templates\\<game>\\<xxx>.png`
+
+三角洲行动与无畏契约的预置模板会随程序安装，无需手动建立 `assets` 文件夹。
 
 4）启动检测
 
@@ -184,7 +186,7 @@ assets/templates/<game>/<xxx>.png（优先写在 exe 同级，可持久）
 - 程序会自动切换到新游戏，并创建 `胜利`、`失败`、`平局` 三个模板槽位
 - 分别进入对应结算界面，使用“抓取模板”菜单抓取实际画面
 
-自定义配置和模板保存在 EXE 同级的 `assets/profiles/` 与 `assets/templates/`。模板尚未抓取时可以继续切换和配置游戏，但不会触发检测，直到至少抓取一个模板。
+自定义配置和模板保存在 `%LOCALAPPDATA%\\DeltaExitAssistant\\assets\\profiles\\` 与 `%LOCALAPPDATA%\\DeltaExitAssistant\\assets\\templates\\`。模板尚未抓取时可以继续切换和配置游戏，但不会触发检测，直到至少抓取一个模板。
 
 ⚙️ 设置（托盘 → 设置）
 
@@ -220,22 +222,27 @@ scan_interval_sec：扫描间隔（秒，越小越灵敏但更耗资源）
 
 🔊 自定义提示音
 
-在托盘 → 设置 → 当前提示音中，可以选择 WAV 格式的音频文件。程序会将它复制到 EXE 同级的 `sounds/custom.wav`，并在后续结算提醒时播放。选择的文件不存在或播放失败时，会自动回退到系统默认提示音。
+在托盘 → 设置 → 当前提示音中，可以选择 WAV 格式的音频文件。程序会将它复制到 `%LOCALAPPDATA%\\DeltaExitAssistant\\sounds\\custom.wav`，并在后续结算提醒时播放。选择的文件不存在或播放失败时，会自动回退到系统默认提示音。
 
 当前版本暂只支持 WAV，不支持 MP3/OGG；也暂不支持按游戏或按结果设置不同音效、音量调节、循环播放。
 
-📦 打包（PyInstaller）
+📦 安装包构建
 
-建议使用：
+安装版使用 PyInstaller `onedir` 目录和 Inno Setup。内置游戏 profile 与模板包含在安装目录；用户数据独立保存在 `%LOCALAPPDATA%\\DeltaExitAssistant`，因此安装到受保护目录也可以保存设置。
 
-python -m PyInstaller --clean -F -w --paths "src" `
-  "src/app.py" --name "Delta-Exit-Assistant" --add-data "assets;assets"
+安装 Inno Setup 6 后，在 PowerShell 中运行：
 
-生成位置：
+```powershell
+.\scripts\build-installer.ps1 -Version 2.3.0
+```
 
-dist/Delta-Exit-Assistant.exe
+生成文件：
 
-注意：V2 支持运行时写入模板（抓取模板）与 config.json，建议把 exe 放在你有写权限的目录（例如桌面/某个文件夹），避免放在系统受限目录。
+`release\\Delta-Exit-Assistant-Setup-2.3.0.exe`
+
+安装程序默认按当前 Windows 用户安装，不需要管理员权限，并提供开始菜单入口、可选桌面快捷方式和卸载程序。卸载默认保留用户的自定义模板与设置。
+
+仍可构建单文件 EXE，但必须通过包含 `assets` 的打包配置构建；单文件 EXE 的用户数据同样保存到 `%LOCALAPPDATA%\\DeltaExitAssistant`。
 
 🧯 常见问题
 1）为什么停留在结算界面不会反复提醒？

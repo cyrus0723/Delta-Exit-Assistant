@@ -4,11 +4,11 @@ from __future__ import annotations
 import json
 import hashlib
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from app_data import bundled_resource_root, user_data_dir
 from roi import RoiRel
 from alert_timer import DEFAULT_ESTIMATED_DURATION_MIN, normalize_duration_min
 
@@ -30,31 +30,19 @@ class GameProfile:
 
 
 def resource_root() -> Path:
-    """
-    Read-only resource root:
-    - dev: project root
-    - pyinstaller: sys._MEIPASS (temp)
-    """
-    if hasattr(sys, "_MEIPASS"):
-        return Path(getattr(sys, "_MEIPASS"))  # type: ignore[arg-type]
-    return Path(__file__).resolve().parent.parent
+    """Return the read-only root containing packaged default assets."""
+    return bundled_resource_root()
 
 
 def runtime_root() -> Path:
-    """
-    Writable runtime root:
-    - dev: project root
-    - frozen exe: directory where the exe is located
-    """
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
+    """Return the per-user writable root for custom assets."""
+    return user_data_dir()
 
 
 def resolve_resource_path(rel_path: str) -> str:
     """
     Resolve path with override priority:
-      1) runtime_root()/rel_path  (user-captured templates)
+      1) runtime_root()/rel_path  (user-captured templates and sounds)
       2) resource_root()/rel_path (bundled assets)
     """
     rel_path = rel_path.replace("\\", "/").strip()
@@ -77,9 +65,8 @@ def _safe_read_json(path: Path) -> Optional[dict]:
 
 def load_profiles_from_assets() -> List[GameProfile]:
     """
-    Load bundled profiles first, then merge runtime profiles by id. This keeps
-    built-in games available when a user adds just one custom profile beside a
-    one-file executable.
+    Load bundled profiles first, then merge per-user profiles by id. This keeps
+    built-in games available when a user adds just one custom profile.
     """
     by_id: dict[str, GameProfile] = {}
 

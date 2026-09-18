@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from mss import mss
 
-from config_store import exe_dir
+from app_data import user_data_dir
 from profiles import GameProfile, TemplateItem
 from roi import rel_to_px
 
@@ -39,11 +39,10 @@ def grab_profile_roi_bgr(profile: GameProfile) -> np.ndarray:
 
 def capture_to_template(profile: GameProfile, tpl: TemplateItem) -> str:
     """
-    Capture current profile ROI and save to writable runtime path:
-      exe_dir()/tpl.path
+    Capture current profile ROI and save to the per-user data directory.
     Return absolute saved path.
     """
     bgr = grab_profile_roi_bgr(profile)
-    out_path = str(exe_dir() / tpl.path.replace("\\", "/"))
+    out_path = str(user_data_dir() / tpl.path.replace("\\", "/"))
     _save_png_compat(out_path, bgr)
     return out_path
