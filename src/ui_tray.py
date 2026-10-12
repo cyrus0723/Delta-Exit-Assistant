@@ -603,13 +603,15 @@ class TrayApp:
             ),
         )
 
-        settings_menu = pystray.Menu(
+        advanced_menu = pystray.Menu(
             pystray.MenuItem(f"匹配阈值 threshold = {self._detector.cfg.threshold:.3f}", self._action_set_threshold),
             pystray.MenuItem(f"回落差值 hysteresis = {self._detector.cfg.hysteresis:.3f}", self._action_set_hysteresis),
             pystray.MenuItem(f"冷却时间 cooldown_sec = {self._detector.cfg.cooldown_sec:.2f}s", self._action_set_cooldown),
             pystray.MenuItem(f"扫描间隔 scan_interval = {self._detector.cfg.scan_interval_sec:.2f}s", self._action_set_interval),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("提醒方式（弹窗/响铃）", mode_menu),
+        )
+
+        reminder_menu = pystray.Menu(
+            pystray.MenuItem("提醒方式", mode_menu),
             pystray.MenuItem(
                 f"当前提示音：{Path(self._notify_settings.sound_path).name if self._notify_settings.sound_path else '系统默认'}",
                 pystray.Menu(
@@ -618,8 +620,6 @@ class TrayApp:
                     pystray.MenuItem("恢复系统默认提示音", self._action_reset_sound),
                 ),
             ),
-            pystray.MenuItem("计时提醒", timer_menu),
-            pystray.Menu.SEPARATOR,
             pystray.MenuItem("编辑通知文本…", self._action_edit_text),
             pystray.MenuItem("发送测试通知", self._action_test_notify),
         )
@@ -648,16 +648,20 @@ class TrayApp:
             pystray.MenuItem("恢复为默认 ROI", self._action_roi_reset),
         )
 
+        template_menu = pystray.Menu(
+            pystray.MenuItem("抓取模板", capture_menu),
+            pystray.MenuItem("ROI调整", roi_menu),
+            pystray.MenuItem("重载模板", self._action_reload_templates),
+        )
+
         return pystray.Menu(
             pystray.MenuItem("启动检测", self._action_start, enabled=lambda item: not self._detector.is_running()),
             pystray.MenuItem("停止检测", self._action_stop, enabled=lambda item: self._detector.is_running()),
-            pystray.Menu.SEPARATOR,
             pystray.MenuItem("选择游戏", pystray.Menu(*profile_items)),
-            pystray.MenuItem("ROI 调整", roi_menu),
-            pystray.MenuItem("抓取模板", capture_menu),
-            pystray.MenuItem("设置", settings_menu),
-            pystray.MenuItem("重载模板", self._action_reload_templates),
-            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("模板调整", template_menu),
+            pystray.MenuItem("提醒设置", reminder_menu),
+            pystray.MenuItem("定时模式", timer_menu),
+            pystray.MenuItem("高级设置", advanced_menu),
             pystray.MenuItem("退出", self._action_quit),
         )
 

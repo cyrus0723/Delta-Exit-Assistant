@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "2.3.0"
+    [string]$Version = "2.3.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,6 +33,15 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller 打包失败，退出代码：$LASTEXITCODE"
     }
+
+    $appRoot = Join-Path $appDist 'Delta-Exit-Assistant'
+    Copy-Item -Path (Join-Path $projectRoot 'packaging\*') -Destination $appRoot
+    # Windows PowerShell 5.1 needs a BOM to read Chinese script text as UTF-8.
+    $shortcutScript = Join-Path $appRoot 'create-shortcut.ps1'
+    $scriptText = Get-Content -LiteralPath $shortcutScript -Raw -Encoding UTF8
+    [System.IO.File]::WriteAllText($shortcutScript, $scriptText, [System.Text.UTF8Encoding]::new($true))
+    $zipPath = Join-Path $releaseRoot "Delta-Exit-Assistant-Portable-$Version.zip"
+    Compress-Archive -Path "$appRoot\*" -DestinationPath $zipPath -Force
 
     $isccCommand = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
     $isccPath = if ($isccCommand) { $isccCommand.Source } else { $null }

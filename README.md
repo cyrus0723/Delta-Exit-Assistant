@@ -45,12 +45,12 @@ V2 版本已升级为 **多游戏 Profile 架构**：每个游戏独立 ROI 与�
   - 进入对应结算页面后，逐项抓取模板即可开始检测
 
 - ✅ **抓取模板（无需截图软件）**
-  - 托盘菜单：`抓取模板 → 抓取：胜利/失败/平局...`
+  - 托盘菜单：`模板调整 → 抓取模板 → 抓取：胜利/失败/平局...`
   - 自动截取当前游戏 ROI 并保存为对应模板图片
-  - 保存位置：优先写入 exe 同级的 `assets/templates/...`（可写、可持续）
+  - 保存位置：`%LOCALAPPDATA%\DeltaExitAssistant\assets\templates\...`
 
 - ✅ **ROI 调整器（roi_tuner）**
-  - 托盘菜单：`ROI 调整 → 预览 ROI / 移动 / 缩放 / 步长 / 恢复默认`
+  - 托盘菜单：`模板调整 → ROI调整 → 预览 ROI / 移动 / 缩放 / 步长 / 恢复默认`
   - 调整结果存入 `config.json` 的 `roi_overrides`，不污染 profile.json
   - 适配不同玩家 UI/分辨率/字体渲染差异
 
@@ -135,7 +135,7 @@ h：ROI 高度占屏幕高度比例
 
 2）校准 ROI（如果截图歪）
 
-托盘 → ROI 调整
+托盘 → 模板调整 → ROI调整
 
 “预览 ROI”查看当前截取区域
 
@@ -154,7 +154,7 @@ h：ROI 高度占屏幕高度比例
 3）抓取模板
 
 进入游戏结算界面（胜利/失败/平局）
-托盘 → 抓取模板 → 选择对应项（例如“抓取：胜利”）
+托盘 → 模板调整 → 抓取模板 → 选择对应项（例如“抓取：胜利”）
 
 用户自己录入的模板保存到：
 
@@ -169,7 +169,7 @@ h：ROI 高度占屏幕高度比例
 
 5）按时间控制提醒（可选）
 
-托盘 → 设置 → 计时提醒：
+托盘 → 定时模式：
 
 - 勾选“启用计时提醒”
 - 设置目标时间，例如 `08:00`
@@ -188,7 +188,7 @@ h：ROI 高度占屏幕高度比例
 
 自定义配置和模板保存在 `%LOCALAPPDATA%\\DeltaExitAssistant\\assets\\profiles\\` 与 `%LOCALAPPDATA%\\DeltaExitAssistant\\assets\\templates\\`。模板尚未抓取时可以继续切换和配置游戏，但不会触发检测，直到至少抓取一个模板。
 
-⚙️ 设置（托盘 → 设置）
+⚙️ 高级设置（托盘 → 高级设置）
 
 可调参数：
 
@@ -200,7 +200,7 @@ cooldown_sec：冷却时间（秒）
 
 scan_interval_sec：扫描间隔（秒，越小越灵敏但更耗资源）
 
-提醒方式：
+提醒方式（托盘 → 提醒设置 → 提醒方式）：
 
 都要（弹窗 + 响铃）
 
@@ -222,7 +222,7 @@ scan_interval_sec：扫描间隔（秒，越小越灵敏但更耗资源）
 
 🔊 自定义提示音
 
-在托盘 → 设置 → 当前提示音中，可以选择 WAV 格式的音频文件。程序会将它复制到 `%LOCALAPPDATA%\\DeltaExitAssistant\\sounds\\custom.wav`，并在后续结算提醒时播放。选择的文件不存在或播放失败时，会自动回退到系统默认提示音。
+在托盘 → 提醒设置 → 当前提示音中，可以选择 WAV 格式的音频文件。程序会将它复制到 `%LOCALAPPDATA%\\DeltaExitAssistant\\sounds\\custom.wav`，并在后续结算提醒时播放。选择的文件不存在或播放失败时，会自动回退到系统默认提示音。
 
 当前版本暂只支持 WAV，不支持 MP3/OGG；也暂不支持按游戏或按结果设置不同音效、音量调节、循环播放。
 
@@ -233,12 +233,16 @@ scan_interval_sec：扫描间隔（秒，越小越灵敏但更耗资源）
 安装 Inno Setup 6 后，在 PowerShell 中运行：
 
 ```powershell
-.\scripts\build-installer.ps1 -Version 2.3.0
+.\scripts\build-installer.ps1 -Version 2.3.1
 ```
 
 生成文件：
 
-`release\\Delta-Exit-Assistant-Setup-2.3.0.exe`
+`release\\Delta-Exit-Assistant-Setup-2.3.1.exe`
+
+同时生成 `release\\Delta-Exit-Assistant-Portable-2.3.1.zip`。完整解压后，根目录的“启动助手.cmd”可直接启动；“创建桌面快捷方式.cmd”会询问是否创建桌面入口。根目录的 `readme.txt` 提供简易操作说明。安装版也会在安装目录创建启动快捷方式。
+
+程序使用 Windows 命名互斥量防止重复启动：已有助手运行时，再次双击会直接退出新实例，现有托盘及检测继续工作。
 
 安装程序默认按当前 Windows 用户安装，不需要管理员权限，并提供开始菜单入口、可选桌面快捷方式和卸载程序。卸载默认保留用户的自定义模板与设置。
 

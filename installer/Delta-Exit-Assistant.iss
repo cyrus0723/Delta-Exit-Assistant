@@ -1,7 +1,7 @@
 #define MyAppName "三角洲下机助手"
 #define MyAppVersion GetEnv("DELTA_EXIT_ASSISTANT_VERSION")
 #if MyAppVersion == ""
-  #define MyAppVersion "2.3.0"
+  #define MyAppVersion "2.3.1"
 #endif
 #define MyAppPublisher "Delta Exit Assistant"
 #define MyAppExeName "Delta-Exit-Assistant.exe"
@@ -36,6 +36,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "{#AppSourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
+Name: "{app}\启动三角洲下机助手"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
