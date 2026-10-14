@@ -5,6 +5,7 @@ import ctypes
 import os
 import shutil
 import tempfile
+import threading
 import wave
 from dataclasses import replace
 from datetime import datetime
@@ -27,6 +28,7 @@ from profiles import (
     save_profile,
 )
 from ui_dialogs import TkDialogService
+from ui_main import MainWindow
 from notify import Notifier, NotifySettings, VALID_NOTIFY_MODES
 from capture import capture_to_template, grab_profile_roi_bgr
 from app_data import migrate_legacy_user_data, user_data_dir
@@ -64,7 +66,8 @@ enable_dpi_awareness()
 
 
 class TrayApp:
-    def __init__(self) -> None:
+    def __init__(self, instance=None) -> None:
+        self._instance = instance
         migrate_legacy_user_data()
         self._cfg: Dict[str, Any] = load_config()
         self._dlg = TkDialogService()
@@ -95,17 +98,19 @@ class TrayApp:
         )
 
         # notifier settings
-        title_tpl = str(self._cfg.get("title_tpl", "{game} 结算检测")).strip() or "{game} 结算检测"
-        msg_tpl = str(self._cfg.get("msg_tpl", "{label}（score={score:.3f}）")).strip() or "{label}（score={score:.3f}）"
-        mode = str(self._cfg.get("notify_mode", "both")).strip().lower()
+        title_tpl = str(self._cfg.get("title_tpl", "{game}：该下机了")).strip() or "{game}：该下机了"
+        msg_tpl = str(self._cfg.get("msg_tpl", NotifySettings.msg_tpl)).strip() or NotifySettings.msg_tpl
+        mode = str(self._cfg.get("notify_mode", "popup")).strip().lower()
+        mode = {"both": "native", "toast": "native_silent"}.get(mode, mode)
         if mode not in VALID_NOTIFY_MODES:
-            mode = "both"
+            mode = "popup"
         sound_path = str(self._cfg.get("sound_path", "")).strip()
 
         self._notify_settings = NotifySettings(
             title_tpl=title_tpl, msg_tpl=msg_tpl, mode=mode, sound_path=sound_path
         )
-        self._notifier = Notifier(APP_NAME, self._profile, self._notify_settings)
+        self._notifier = Notifier(APP_NAME, self._profile, self._notify_settings,
+                                  show_popup=self._dlg.show_alert)
 
         # detector
         self._detector = Detector(
@@ -203,6 +208,8 @@ class TrayApp:
     def _rebuild_menu(self) -> None:
         self._icon.menu = self._build_menu()
         self._icon.update_menu()
+        if hasattr(self, "_main_window"):
+            self._dlg.run_in_tk(lambda _root: self._main_window.refresh())
 
     # -------------------------
     # Actions: start/stop
@@ -222,6 +229,9 @@ class TrayApp:
         except Exception:
             pass
         icon.stop()
+
+    def _action_open_window(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        self._main_window.show()
 
     # -------------------------
     # Actions: select profile
@@ -423,7 +433,8 @@ class TrayApp:
             "  {game}  当前游戏名\n"
             "  {label} 结果标签（来自 profile.json 的 templates[].label）\n"
             "  {score} 匹配分数（支持格式：{score:.3f}）\n"
-            "  {id}    模板ID\n",
+            "  {id}    模板ID\n"
+            "  {time} 提醒时间（HH:MM）\n",
         )
 
         title = self._dlg.ask_str("编辑通知标题", "例如：{game} 结算检测", self._notify_settings.title_tpl)
@@ -581,8 +592,9 @@ class TrayApp:
         )
 
         mode_menu = pystray.Menu(
-            pystray.MenuItem("都要（弹窗 + 响铃）", self._action_set_mode("both"), checked=self._is_mode("both"), radio=True),
-            pystray.MenuItem("只弹窗", self._action_set_mode("toast"), checked=self._is_mode("toast"), radio=True),
+            pystray.MenuItem("应用弹窗 + 提示音", self._action_set_mode("popup"), checked=self._is_mode("popup"), radio=True),
+            pystray.MenuItem("Windows 通知 + 提示音", self._action_set_mode("native"), checked=self._is_mode("native"), radio=True),
+            pystray.MenuItem("仅 Windows 通知", self._action_set_mode("native_silent"), checked=self._is_mode("native_silent"), radio=True),
             pystray.MenuItem("只响铃", self._action_set_mode("sound"), checked=self._is_mode("sound"), radio=True),
         )
 
@@ -613,11 +625,11 @@ class TrayApp:
         reminder_menu = pystray.Menu(
             pystray.MenuItem("提醒方式", mode_menu),
             pystray.MenuItem(
-                f"当前提示音：{Path(self._notify_settings.sound_path).name if self._notify_settings.sound_path else '系统默认'}",
+                f"当前提示音：{Path(self._notify_settings.sound_path).name if self._notify_settings.sound_path else '该下播了老铁.wav'}",
                 pystray.Menu(
                     pystray.MenuItem("选择提示音…", self._action_select_sound),
                     pystray.MenuItem("测试当前提示音", self._action_test_sound),
-                    pystray.MenuItem("恢复系统默认提示音", self._action_reset_sound),
+                    pystray.MenuItem("恢复默认提示音", self._action_reset_sound),
                 ),
             ),
             pystray.MenuItem("编辑通知文本…", self._action_edit_text),
@@ -655,6 +667,7 @@ class TrayApp:
         )
 
         return pystray.Menu(
+            pystray.MenuItem("打开主窗口", self._action_open_window, default=True),
             pystray.MenuItem("启动检测", self._action_start, enabled=lambda item: not self._detector.is_running()),
             pystray.MenuItem("停止检测", self._action_stop, enabled=lambda item: self._detector.is_running()),
             pystray.MenuItem("选择游戏", pystray.Menu(*profile_items)),
@@ -666,4 +679,11 @@ class TrayApp:
         )
 
     def run(self) -> None:
+        self._main_window = MainWindow(self._dlg, self)
+        if self._instance:
+            def watch_launches():
+                while True:
+                    if self._instance.wait_for_show():
+                        self._main_window.show()
+            threading.Thread(target=watch_launches, daemon=True).start()
         self._icon.run()

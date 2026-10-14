@@ -1,6 +1,7 @@
 # 🎮 Delta Exit Assistant —— 多游戏结算检测托盘助手（V2）
 
 一个用于**检测游戏结算画面**并提醒你“该下机了”的 Windows 托盘工具。  
+双击启动入口会打开主窗口；关闭窗口只会收起到托盘，不会停止检测。再次双击可唤起已有窗口。
 V2 版本已升级为 **多游戏 Profile 架构**：每个游戏独立 ROI 与模板组，可在托盘中切换游戏，且支持一键抓取模板与在线微调 ROI。
 
 ---
@@ -24,9 +25,9 @@ V2 版本已升级为 **多游戏 Profile 架构**：每个游戏独立 ROI 与�
     - 停留在结算界面不会疯狂重复提醒
     - 退出结算（分数跌破回落阈值）才会重新武装
 
-- ✅ **通知系统（Win11 Toast） + 提示音**
-  - 使用 `winotify` 发送 Windows 通知（打包后稳定）
-  - 支持：**只响铃 / 只弹窗 / 都要**
+- ✅ **应用弹窗 + 提示音（默认）**
+  - 大字置顶提醒，点击“我已了解”关闭
+  - 可在“提醒设置 → 提醒方式”切换为 Windows 通知 + 提示音、仅 Windows 通知或只响铃
 
 - ✅ **托盘 UI 可调参数**
   - threshold / hysteresis / cooldown / scan_interval
@@ -202,9 +203,11 @@ scan_interval_sec：扫描间隔（秒，越小越灵敏但更耗资源）
 
 提醒方式（托盘 → 提醒设置 → 提醒方式）：
 
-都要（弹窗 + 响铃）
+应用弹窗 + 提示音（默认，不依赖 Windows 通知开关）
 
-只弹窗
+Windows 通知 + 提示音
+
+仅 Windows 通知
 
 只响铃
 
@@ -220,9 +223,11 @@ scan_interval_sec：扫描间隔（秒，越小越灵敏但更耗资源）
 
 {id} 模板 ID
 
+{time} 提醒时的当前时间（HH:MM）
+
 🔊 自定义提示音
 
-在托盘 → 提醒设置 → 当前提示音中，可以选择 WAV 格式的音频文件。程序会将它复制到 `%LOCALAPPDATA%\\DeltaExitAssistant\\sounds\\custom.wav`，并在后续结算提醒时播放。选择的文件不存在或播放失败时，会自动回退到系统默认提示音。
+默认提示音为内置的“该下播了老铁.wav”。在托盘 → 提醒设置 → 当前提示音中，可以选择其他 WAV 文件。程序会将它复制到 `%LOCALAPPDATA%\\DeltaExitAssistant\\sounds\\custom.wav`，并在后续结算提醒时播放。选择的文件不存在或播放失败时，会回退到内置提示音。
 
 当前版本暂只支持 WAV，不支持 MP3/OGG；也暂不支持按游戏或按结果设置不同音效、音量调节、循环播放。
 
@@ -233,14 +238,14 @@ scan_interval_sec：扫描间隔（秒，越小越灵敏但更耗资源）
 安装 Inno Setup 6 后，在 PowerShell 中运行：
 
 ```powershell
-.\scripts\build-installer.ps1 -Version 2.3.1
+.\scripts\build-installer.ps1 -Version 2.3.2
 ```
 
 生成文件：
 
-`release\\Delta-Exit-Assistant-Setup-2.3.1.exe`
+`release\\Delta-Exit-Assistant-Setup-2.3.2.exe`
 
-同时生成 `release\\Delta-Exit-Assistant-Portable-2.3.1.zip`。完整解压后，根目录的“启动助手.cmd”可直接启动；“创建桌面快捷方式.cmd”会询问是否创建桌面入口。根目录的 `readme.txt` 提供简易操作说明。安装版也会在安装目录创建启动快捷方式。
+同时生成 `release\\Delta-Exit-Assistant-Portable-2.3.2.zip`。完整解压后，根目录的“启动助手.cmd”可直接启动；“创建桌面快捷方式.cmd”会询问是否创建桌面入口。根目录的 `readme.txt` 提供简易操作说明。安装版也会在安装目录创建启动快捷方式。
 
 程序使用 Windows 命名互斥量防止重复启动：已有助手运行时，再次双击会直接退出新实例，现有托盘及检测继续工作。
 

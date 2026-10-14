@@ -8,9 +8,10 @@ def main() -> None:
     instance = SingleInstance()
     try:
         if instance.already_running:
+            instance.show_existing_window()
             return
         from ui_tray import TrayApp
-        TrayApp().run()
+        TrayApp(instance).run()
     finally:
         instance.close()
 

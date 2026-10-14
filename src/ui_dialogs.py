@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import ctypes
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
@@ -57,6 +58,8 @@ class TkDialogService:
         self._root.mainloop()
 
     def _call(self, fn: Callable[[], Any], timeout: float = 60.0) -> Any:
+        if threading.current_thread() is self._thread:
+            return fn()
         job = _TkJob(fn=fn, done=threading.Event(), out={})
         self._q.put(job)
         job.done.wait(timeout=timeout)
@@ -64,6 +67,58 @@ class TkDialogService:
 
     def run_in_tk(self, fn: Callable[[tk.Tk], Any], timeout: float = 120.0) -> Any:
         return self._call(lambda: fn(self._root), timeout=timeout)
+
+    def show_alert(self, title: str, msg: str) -> None:
+        """Queue a nonblocking reminder on the Tk thread."""
+        self._q.put(_TkJob(fn=lambda: self._show_alert_window(title, msg),
+                           done=threading.Event(), out={}))
+
+    def _show_alert_window(self, title: str, msg: str) -> None:
+        class Rect(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
+        user32.GetWindowRect.argtypes = (ctypes.c_void_p, ctypes.POINTER(Rect))
+        user32.SetWindowPos.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+                                       ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint)
+        foreground = user32.GetForegroundWindow()
+        rect = Rect()
+        has_foreground = bool(foreground and user32.GetWindowRect(foreground, ctypes.byref(rect)))
+        win = tk.Toplevel(self._root)
+        win.title("下机提醒")
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.configure(bg="#f8faf9")
+        win.geometry("480x330")
+
+        tk.Label(win, text=title, font=("Microsoft YaHei UI", 20, "bold"),
+                 bg="#f8faf9", fg="#172c2a", wraplength=430).pack(padx=24, pady=(25, 12))
+        body = tk.Text(win, font=("Microsoft YaHei UI", 13), bg="#f8faf9",
+                       fg="#344744", wrap="word", relief="flat", height=6,
+                       padx=8, pady=4)
+        body.insert("1.0", msg)
+        body.configure(state="disabled")
+        body.pack(padx=24, fill="both", expand=True)
+        button = tk.Button(win, text="我已了解", command=win.destroy,
+                           font=("Microsoft YaHei UI", 14, "bold"),
+                           bg="#147d67", fg="white", activebackground="#0e624f",
+                           activeforeground="white", padx=28, pady=10)
+        button.pack(pady=(12, 20), ipadx=18)
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        win.update_idletasks()
+        if has_foreground:
+            x = (rect.left + rect.right - win.winfo_width()) // 2
+            y = (rect.top + rect.bottom - win.winfo_height()) // 2
+        else:
+            x = (win.winfo_screenwidth() - win.winfo_width()) // 2
+            y = (win.winfo_screenheight() - win.winfo_height()) // 2
+        win.geometry(f"+{x}+{y}")
+        win.lift()
+        user32.SetWindowPos(win.winfo_id(), ctypes.c_void_p(-1), x, y, 0, 0, 0x0001 | 0x0040)
+        win.focus_force()
+        button.focus_set()
 
     def info(self, title: str, msg: str) -> None:
         def _f():
