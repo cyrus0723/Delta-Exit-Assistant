@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "2.3.3"
+    [string]$Version = "2.3.4"
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,6 +60,17 @@ try {
     }
     if (-not $isccPath) {
         throw "未找到 Inno Setup 6。请安装后重新运行此脚本。"
+    }
+
+    $cscPath = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
+    if (-not (Test-Path -LiteralPath $cscPath)) {
+        throw "未找到 .NET Framework C# 编译器，无法生成卸载入口。"
+    }
+    $uninstallLauncher = Join-Path $releaseRoot 'Uninstall-Delta-Exit-Assistant.exe'
+    & $cscPath /nologo /target:winexe /out:$uninstallLauncher `
+        /reference:System.Windows.Forms.dll 'installer\UninstallLauncher.cs'
+    if ($LASTEXITCODE -ne 0) {
+        throw "卸载入口编译失败，退出代码：$LASTEXITCODE"
     }
 
     $env:DELTA_EXIT_ASSISTANT_VERSION = $Version

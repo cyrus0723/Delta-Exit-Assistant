@@ -19,19 +19,28 @@ class MainWindow:
         win = tk.Toplevel(root)
         self.window = win
         win.title("三角洲下机助手")
-        win.geometry("760x640")
+        screen_height = win.winfo_screenheight()
+        win.geometry(f"800x{min(760, screen_height - 80)}")
         win.minsize(700, 570)
         win.protocol("WM_DELETE_WINDOW", win.withdraw)
         win.configure(bg="#f5f7f6")
+        win.bind_all("<MouseWheel>", self._on_mousewheel)
         style = ttk.Style(win)
         style.configure("Clear.TButton", font=("Microsoft YaHei UI", 10), padding=(12, 7))
         style.configure("Clear.TNotebook.Tab", font=("Microsoft YaHei UI", 10), padding=(12, 6))
         outer = ttk.Frame(win, padding=20)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="三角洲下机助手", font=("Microsoft YaHei UI", 19, "bold")).pack(anchor="w")
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(3, weight=1)
+        ttk.Label(outer, text="三角洲下机助手", font=("Microsoft YaHei UI", 19, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Button(outer, text="退出程序", style="Clear.TButton",
+                   command=lambda: self.app._action_quit(self.app._icon, None)).grid(row=0, column=1, sticky="e")
 
-        row = ttk.Frame(outer)
-        row.pack(fill="x", pady=(22, 8))
+        controls = ttk.Frame(outer)
+        controls.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 8))
+
+        row = ttk.Frame(controls)
+        row.pack(fill="x", pady=(0, 6))
         ttk.Label(row, text="当前游戏").pack(side="left")
         self.game = ttk.Combobox(row, state="readonly", width=23)
         self.game.pack(side="left", padx=12)
@@ -39,10 +48,8 @@ class MainWindow:
         ttk.Button(row, text="新建游戏", style="Clear.TButton",
                    command=lambda: self._act(self.app._action_new_game)).pack(side="left")
 
-        self.status = ttk.Label(outer, font=("Microsoft YaHei UI", 11))
-        self.status.pack(anchor="w", pady=8)
-        timing = ttk.LabelFrame(outer, text="提醒时机", padding=12)
-        timing.pack(fill="x", pady=12)
+        timing = ttk.LabelFrame(controls, text="提醒时机", padding=12)
+        timing.pack(fill="x", pady=(6, 0))
         self.timer = tk.StringVar()
         ttk.Radiobutton(timing, text="每局结束时", variable=self.timer, value="always",
                         command=self._set_timer).grid(row=0, column=0, sticky="w", pady=5)
@@ -68,17 +75,23 @@ class MainWindow:
                                 font=("Microsoft YaHei UI", 12, "bold"),
                                 fg="white", activeforeground="white", relief="flat",
                                 borderwidth=0, padx=44, pady=10, width=14, cursor="hand2")
-        self.toggle.pack(pady=(4, 14))
+        self.toggle.grid(row=2, column=0, columnspan=2, pady=(0, 12))
         tabs = ttk.Notebook(outer, style="Clear.TNotebook")
-        tabs.pack(fill="both", expand=True)
+        tabs.grid(row=3, column=0, columnspan=2, sticky="nsew")
         reminder = self._scroll_tab(tabs, "提醒设置")
         templates = self._scroll_tab(tabs, "模板与识别")
         advanced = self._scroll_tab(tabs, "高级设置")
         self.mode = tk.StringVar()
-        for label, value in (("应用弹窗 + 提示音", "popup"), ("Windows 通知 + 提示音", "native"),
-                             ("仅 Windows 通知", "native_silent"), ("只响铃", "sound")):
-            ttk.Radiobutton(reminder, text=label, value=value, variable=self.mode,
-                            command=self._set_mode).pack(anchor="w", pady=2)
+        mode_choices = ttk.Frame(reminder)
+        mode_choices.pack(fill="x")
+        mode_choices.columnconfigure((0, 1), weight=1, uniform="mode")
+        for index, (label, value) in enumerate((("应用弹窗 + 提示音", "popup"),
+                                                ("Windows 通知 + 提示音", "native"),
+                                                ("仅 Windows 通知", "native_silent"),
+                                                ("只响铃", "sound"))):
+            ttk.Radiobutton(mode_choices, text=label, value=value, variable=self.mode,
+                            command=self._set_mode).grid(row=index // 2, column=index % 2,
+                                                         sticky="w", pady=4)
         text_row = ttk.Frame(reminder)
         text_row.pack(fill="x", pady=(8, 0))
         ttk.Label(text_row, text="标题").grid(row=0, column=0, sticky="w", pady=3)
@@ -123,17 +136,20 @@ class MainWindow:
                               ("冷却时间", self.app._action_set_cooldown),
                               ("扫描间隔", self.app._action_set_interval)):
             ttk.Button(advanced, text=label, style="Clear.TButton", command=lambda a=action: self._act(a)).pack(anchor="w", pady=5)
-        ttk.Button(outer, text="退出程序", style="Clear.TButton",
-                   command=lambda: self.app._action_quit(self.app._icon, None)).pack(anchor="e", pady=(10, 0))
         self.refresh()
-        self._update_status()
         win.deiconify()
 
     def _scroll_tab(self, tabs, title):
         page = ttk.Frame(tabs)
         tabs.add(page, text=title)
-        canvas = tk.Canvas(page, highlightthickness=0, borderwidth=0, bg="#f5f7f6")
-        scrollbar = ttk.Scrollbar(page, orient="vertical", command=canvas.yview)
+        content, frame = self._scroll_content(page)
+        frame.pack(fill="both", expand=True)
+        return content
+
+    def _scroll_content(self, parent, height=0):
+        frame = ttk.Frame(parent)
+        canvas = tk.Canvas(frame, highlightthickness=0, borderwidth=0, bg="#f5f7f6", height=height)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
@@ -141,8 +157,14 @@ class MainWindow:
         item = canvas.create_window((0, 0), window=content, anchor="nw")
         content.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(item, width=event.width))
-        canvas.bind("<MouseWheel>", lambda event: canvas.yview_scroll(-int(event.delta / 120), "units"))
-        return content
+        return content, frame
+
+    def _on_mousewheel(self, event):
+        widget = event.widget
+        while widget is not None and not isinstance(widget, tk.Canvas):
+            widget = getattr(widget, "master", None)
+        if widget is not None:
+            widget.yview_scroll(-int(event.delta / 120), "units")
 
     def _act(self, action):
         action(self.app._icon, None)
@@ -203,12 +225,6 @@ class MainWindow:
                 return
         self._act(self.app._action_stop if self.app._detector.is_running() else self.app._action_start)
 
-    def _update_status(self):
-        if self.window and self.window.winfo_exists():
-            if self.app._timer_mode == "countdown" and self.app._detector.is_running():
-                self.status.config(text="检测状态：" + ("正在检测" if self.app._scan_allowed() else "等待开始检测"))
-            self.window.after(1000, self._update_status)
-
     def _capture(self):
         if not self.app._profile.templates:
             self.dialogs.info("没有模板", "当前游戏没有可抓取的模板。")
@@ -237,7 +253,6 @@ class MainWindow:
         self.game.current(next((i for i, p in enumerate(self.app._profiles)
                                 if p.id == self.app._profile_base.id), 0))
         running = self.app._detector.is_running()
-        self.status.config(text="检测状态：正在检测" if running else "检测状态：已停止")
         self.toggle.config(text="停止检测" if running else "开始检测",
                            bg="#bd3540" if running else "#16805a",
                            activebackground="#a82933" if running else "#116747")
@@ -251,14 +266,10 @@ class MainWindow:
             self.countdown.insert(0, f"{self.app._countdown_hours:g}")
         if self.app._timer_mode == "countdown":
             timing_text = self.app._countdown_window_label() + "，结算后提醒"
-            status = "等待开始检测" if running and not self.app._scan_allowed() else "正在检测" if running else "已停止"
         elif self.app._timer_mode == "clock":
             timing_text = self.app._timer_window_label() + "，下一次结算时提醒"
-            status = "正在检测" if running else "已停止"
         else:
             timing_text = "每次检测到新的结算画面时提醒"
-            status = "正在检测" if running else "已停止"
-        self.status.config(text="检测状态：" + status)
         self.window_label.config(text=timing_text)
         self.mode.set(self.app._notify_settings.mode)
         self.title_text.delete(0, "end")

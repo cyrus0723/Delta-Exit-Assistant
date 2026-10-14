@@ -1,7 +1,7 @@
 #define MyAppName "三角洲下机助手"
 #define MyAppVersion GetEnv("DELTA_EXIT_ASSISTANT_VERSION")
 #if MyAppVersion == ""
-  #define MyAppVersion "2.3.3"
+  #define MyAppVersion "2.3.4"
 #endif
 #define MyAppPublisher "Delta Exit Assistant"
 #define MyAppExeName "Delta-Exit-Assistant.exe"
@@ -34,6 +34,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Files]
 Source: "{#AppSourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\Uninstall-Delta-Exit-Assistant.exe"; DestDir: "{app}"; DestName: "一键卸载三角洲下机助手.exe"; Flags: ignoreversion
 
 [Icons]
 Name: "{app}\启动三角洲下机助手"; Filename: "{app}\{#MyAppExeName}"
