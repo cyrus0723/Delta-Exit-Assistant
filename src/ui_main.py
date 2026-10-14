@@ -210,9 +210,7 @@ class MainWindow:
             overrides = {}
             self.app._cfg["timer_game_durations"] = overrides
         overrides[self.app._profile_base.id] = duration
-        self.app._persist()
-        self.app._rebuild_menu()
-        self.refresh()
+        self.app._set_timer_mode("clock")
 
     def _set_mode(self):
         if self.mode.get() in VALID_NOTIFY_MODES:

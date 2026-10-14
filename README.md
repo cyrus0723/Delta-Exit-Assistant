@@ -243,14 +243,14 @@ Windows 通知 + 提示音
 安装 Inno Setup 6 后，在 PowerShell 中运行：
 
 ```powershell
-.\scripts\build-installer.ps1 -Version 2.3.4
+.\scripts\build-installer.ps1 -Version 2.3.5
 ```
 
 生成文件：
 
-`release\\Delta-Exit-Assistant-Setup-2.3.4.exe`
+`release\\Delta-Exit-Assistant-Setup-2.3.5.exe`
 
-同时生成 `release\\Delta-Exit-Assistant-Portable-2.3.4.zip`。完整解压后，根目录的“启动助手.cmd”可直接启动；“创建桌面快捷方式.cmd”会询问是否创建桌面入口。根目录的 `readme.txt` 提供简易操作说明。安装版也会在安装目录创建启动快捷方式。
+同时生成 `release\\Delta-Exit-Assistant-Portable-2.3.5.zip`。完整解压后，根目录的“启动助手.cmd”可直接启动；“创建桌面快捷方式.cmd”会询问是否创建桌面入口。根目录的 `readme.txt` 提供简易操作说明。安装版也会在安装目录创建启动快捷方式。
 
 程序使用 Windows 命名互斥量防止重复启动：已有助手运行时，再次双击会直接退出新实例，现有托盘及检测继续工作。
 

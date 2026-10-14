@@ -10,9 +10,33 @@ from alert_timer import alert_window, countdown_window, is_alert_window_open, no
 from detector import Detector, DetectorConfig
 from profiles import GameProfile, TemplateItem, normalize_profile_id
 from roi import RoiRel
+from ui_main import MainWindow
 
 
 class TimerTests(unittest.TestCase):
+    def test_apply_time_selects_clock_mode(self) -> None:
+        window = Mock()
+        window.target.get.return_value = "23:00"
+        window.duration.get.return_value = "30"
+        window.app._cfg = {}
+        window.app._profile_base.id = "delta"
+
+        MainWindow._save_timer(window)
+
+        self.assertEqual(window.app._timer_target_time, time(23, 0))
+        self.assertEqual(window.app._cfg["timer_game_durations"], {"delta": 30})
+        window.app._set_timer_mode.assert_called_once_with("clock")
+
+    def test_invalid_time_does_not_change_mode(self) -> None:
+        window = Mock()
+        window.target.get.return_value = "25:00"
+        window.duration.get.return_value = "30"
+
+        MainWindow._save_timer(window)
+
+        window.app._set_timer_mode.assert_not_called()
+        window.dialogs.info.assert_called_once()
+
     def test_countdown_starts_scanning_before_target(self) -> None:
         started = datetime(2026, 10, 14, 22, 45)
         window = countdown_window(started, 2, 30)
