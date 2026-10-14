@@ -1,7 +1,7 @@
 #define MyAppName "三角洲下机助手"
 #define MyAppVersion GetEnv("DELTA_EXIT_ASSISTANT_VERSION")
 #if MyAppVersion == ""
-  #define MyAppVersion "2.3.2"
+  #define MyAppVersion "2.3.3"
 #endif
 #define MyAppPublisher "Delta Exit Assistant"
 #define MyAppExeName "Delta-Exit-Assistant.exe"

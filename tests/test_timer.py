@@ -2,16 +2,31 @@ from datetime import datetime, time
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from alert_timer import alert_window, is_alert_window_open, normalize_duration_min, parse_target_time
+from alert_timer import alert_window, countdown_window, is_alert_window_open, normalize_duration_min, parse_target_time, parse_countdown_hours
 from detector import Detector, DetectorConfig
 from profiles import GameProfile, TemplateItem, normalize_profile_id
 from roi import RoiRel
 
 
 class TimerTests(unittest.TestCase):
+    def test_countdown_starts_scanning_before_target(self) -> None:
+        started = datetime(2026, 10, 14, 22, 45)
+        window = countdown_window(started, 2, 30)
+        self.assertEqual(window.opens_at, datetime(2026, 10, 15, 0, 15))
+        self.assertEqual(window.target_at, datetime(2026, 10, 15, 0, 45))
+
+    def test_short_countdown_scans_immediately(self) -> None:
+        started = datetime(2026, 10, 14, 22, 45)
+        self.assertEqual(countdown_window(started, 0.25, 30).opens_at, started)
+
+    def test_countdown_input_range(self) -> None:
+        self.assertEqual(parse_countdown_hours("1.5"), 1.5)
+        for value in ("0", "-1", "25", "nan", "bad"):
+            self.assertIsNone(parse_countdown_hours(value))
     def test_parse_target_time_accepts_single_digit_hour(self) -> None:
         self.assertEqual(parse_target_time("8:05"), time(8, 5))
 
@@ -60,6 +75,18 @@ class TimerTests(unittest.TestCase):
         )
         detector = Detector(DetectorConfig(), profile, on_match=lambda result: None)
         self.assertEqual(detector._tpls, {})
+
+    def test_detector_does_not_capture_before_countdown_opens(self) -> None:
+        profile = GameProfile("test", "Test", 30, RoiRel(0, 0, 0.1, 0.1), [])
+        allowed = Mock(return_value=False)
+        detector = Detector(DetectorConfig(), profile, on_match=Mock(), scan_allowed=allowed)
+        detector._stop_evt = Mock()
+        detector._stop_evt.is_set.side_effect = [False, True]
+        with patch.object(detector, "_get_screen_size", return_value=(1920, 1080)), \
+             patch.object(detector, "_grab_roi") as grab:
+            detector._run()
+        allowed.assert_called_once()
+        grab.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -2,11 +2,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from math import isfinite
 from typing import Optional
 
 
 DEFAULT_ESTIMATED_DURATION_MIN = 30
 MAX_ESTIMATED_DURATION_MIN = 24 * 60
+MAX_COUNTDOWN_HOURS = 24
+
+
+def parse_countdown_hours(value: object) -> Optional[float]:
+    try:
+        hours = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(hours) or not 0 < hours <= MAX_COUNTDOWN_HOURS:
+        return None
+    return hours
+
+
+def countdown_window(started_at: datetime, hours: float, duration_min: int) -> "AlertWindow":
+    target_at = started_at + timedelta(hours=hours)
+    return AlertWindow(target_at, max(started_at, target_at - timedelta(minutes=duration_min)))
 
 
 def parse_target_time(value: str) -> Optional[time]:

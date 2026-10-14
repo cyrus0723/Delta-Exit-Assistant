@@ -39,6 +39,8 @@ from alert_timer import (
     is_alert_window_open,
     normalize_duration_min,
     parse_target_time,
+    parse_countdown_hours,
+    countdown_window,
 )
 
 from roi_tuner import (
@@ -88,6 +90,12 @@ class TrayApp:
         self._timer_enabled = bool(self._cfg.get("timer_enabled", False))
         raw_target_time = str(self._cfg.get("timer_target_time", "08:00"))
         self._timer_target_time = parse_target_time(raw_target_time) or parse_target_time("08:00")
+        self._timer_mode = str(self._cfg.get("timer_mode", "clock" if self._timer_enabled else "always"))
+        if self._timer_mode not in ("always", "clock", "countdown"):
+            self._timer_mode = "always"
+        self._timer_enabled = self._timer_mode == "clock"
+        self._countdown_hours = parse_countdown_hours(self._cfg.get("countdown_hours", 2)) or 2.0
+        self._countdown_started_at = None
 
         # detector config
         det_cfg = DetectorConfig(
@@ -118,6 +126,7 @@ class TrayApp:
             self._profile,
             on_match=self._on_match,
             alerts_allowed=self._alerts_allowed_for_profile,
+            scan_allowed=self._scan_allowed,
         )
 
         # tray icon
@@ -177,6 +186,10 @@ class TrayApp:
         return normalize_duration_min(profile.estimated_duration_min, DEFAULT_ESTIMATED_DURATION_MIN)
 
     def _alerts_allowed_for_profile(self, profile: GameProfile) -> bool:
+        if self._timer_mode == "countdown":
+            return self._scan_allowed()
+        if self._timer_mode == "always":
+            return True
         if not self._timer_enabled:
             return True
         return is_alert_window_open(
@@ -187,6 +200,29 @@ class TrayApp:
         duration = self._game_duration_min(self._profile_base)
         window = alert_window(datetime.now(), self._timer_target_time, duration)
         return f"{window.opens_at:%H:%M} 起（目标 {window.target_at:%H:%M}）"
+
+    def _scan_allowed(self) -> bool:
+        if self._timer_mode != "countdown":
+            return True
+        if self._countdown_started_at is None:
+            return False
+        window = countdown_window(self._countdown_started_at, self._countdown_hours,
+                                  self._game_duration_min(self._profile_base))
+        return datetime.now() >= window.opens_at
+
+    def _countdown_window_label(self) -> str:
+        started = self._countdown_started_at or datetime.now()
+        window = countdown_window(started, self._countdown_hours,
+                                  self._game_duration_min(self._profile_base))
+        prefix = "预计" if self._countdown_started_at is None else ""
+        return f"{prefix}{window.opens_at:%m-%d %H:%M} 开始检测（目标 {window.target_at:%m-%d %H:%M}）"
+
+    def _set_timer_mode(self, mode: str) -> None:
+        self._timer_mode = mode
+        self._timer_enabled = mode == "clock"
+        self._countdown_started_at = datetime.now() if mode == "countdown" and self._detector.is_running() else None
+        self._persist()
+        self._rebuild_menu()
 
     # -------------------------
     # Persistence + menu refresh
@@ -202,6 +238,8 @@ class TrayApp:
         self._cfg["notify_mode"] = self._notify_settings.mode
         self._cfg["sound_path"] = self._notify_settings.sound_path
         self._cfg["timer_enabled"] = self._timer_enabled
+        self._cfg["timer_mode"] = self._timer_mode
+        self._cfg["countdown_hours"] = self._countdown_hours
         self._cfg["timer_target_time"] = self._timer_target_time.strftime("%H:%M")
         save_config(self._cfg)
 
@@ -215,10 +253,15 @@ class TrayApp:
     # Actions: start/stop
     # -------------------------
     def _action_start(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        if not self._detector.is_running() and self._timer_mode == "countdown":
+            self._countdown_started_at = datetime.now()
         self._detector.start()
+        self._rebuild_menu()
 
     def _action_stop(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         self._detector.stop()
+        self._countdown_started_at = None
+        self._rebuild_menu()
 
     def _action_reload_templates(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         self._detector.reload_templates()
@@ -364,9 +407,18 @@ class TrayApp:
         return self._timer_enabled
 
     def _action_toggle_timer(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        self._timer_enabled = not self._timer_enabled
-        self._persist()
-        self._rebuild_menu()
+        self._set_timer_mode("always" if self._timer_mode == "clock" else "clock")
+
+    def _action_set_countdown(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        raw = self._dlg.ask_str("再玩几个小时", "请输入 0～24 小时，例如 2 或 1.5。", str(self._countdown_hours))
+        if raw is None:
+            return
+        hours = parse_countdown_hours(raw)
+        if hours is None:
+            self._dlg.info("时长无效", "请输入大于 0、且不超过 24 的小时数。")
+            return
+        self._countdown_hours = hours
+        self._set_timer_mode("countdown")
 
     def _action_set_timer_target(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         raw = self._dlg.ask_str(
@@ -600,6 +652,8 @@ class TrayApp:
 
         timer_menu = pystray.Menu(
             pystray.MenuItem("启用计时提醒", self._action_toggle_timer, checked=self._is_timer_enabled),
+            pystray.MenuItem(f"再玩 {self._countdown_hours:g} 小时", self._action_set_countdown,
+                             checked=lambda item: self._timer_mode == "countdown"),
             pystray.MenuItem(
                 f"目标时间 = {self._timer_target_time:%H:%M}", self._action_set_timer_target
             ),

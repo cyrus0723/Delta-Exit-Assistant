@@ -40,6 +40,11 @@ V2 版本已升级为 **多游戏 Profile 架构**：每个游戏独立 ROI 与�
   - 例如目标时间为 `08:00`、游戏时长为 `30` 分钟时，程序从 `07:30` 起才允许结算提醒
   - 窗口外仍会继续截图和匹配，但不会触发通知；窗口开启时，已显示的结算页可立即提醒
 
+- ✅ **再玩 X 小时**
+  - 从点击“开始检测”起计算，以 X 小时减去当前游戏预计单局时长，决定何时开始画面检测
+  - 等待期间不截图；开始检测后仍须识别到结算画面才提醒
+  - 停止后再次开始会重新计时；预计单局时长大于 X 小时时立即检测
+
 - ✅ **自定义游戏与模板**
   - 托盘菜单可新建游戏，拖拽框选该游戏的结算文字区域（ROI）
   - 自动创建可持久化的游戏配置，以及胜利、失败、平局三个模板槽位
@@ -238,14 +243,14 @@ Windows 通知 + 提示音
 安装 Inno Setup 6 后，在 PowerShell 中运行：
 
 ```powershell
-.\scripts\build-installer.ps1 -Version 2.3.2
+.\scripts\build-installer.ps1 -Version 2.3.3
 ```
 
 生成文件：
 
-`release\\Delta-Exit-Assistant-Setup-2.3.2.exe`
+`release\\Delta-Exit-Assistant-Setup-2.3.3.exe`
 
-同时生成 `release\\Delta-Exit-Assistant-Portable-2.3.2.zip`。完整解压后，根目录的“启动助手.cmd”可直接启动；“创建桌面快捷方式.cmd”会询问是否创建桌面入口。根目录的 `readme.txt` 提供简易操作说明。安装版也会在安装目录创建启动快捷方式。
+同时生成 `release\\Delta-Exit-Assistant-Portable-2.3.3.zip`。完整解压后，根目录的“启动助手.cmd”可直接启动；“创建桌面快捷方式.cmd”会询问是否创建桌面入口。根目录的 `readme.txt` 提供简易操作说明。安装版也会在安装目录创建启动快捷方式。
 
 程序使用 Windows 命名互斥量防止重复启动：已有助手运行时，再次双击会直接退出新实例，现有托盘及检测继续工作。
 

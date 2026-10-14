@@ -59,6 +59,7 @@ class Detector:
         profile: GameProfile,
         on_match: Callable[[MatchResult], None],
         alerts_allowed: Optional[Callable[[GameProfile], bool]] = None,
+        scan_allowed: Optional[Callable[[], bool]] = None,
     ):
         self.cfg = cfg
         self._profile_lock = threading.Lock()
@@ -66,6 +67,7 @@ class Detector:
 
         self._on_match = on_match
         self._alerts_allowed = alerts_allowed or (lambda _profile: True)
+        self._scan_allowed = scan_allowed or (lambda: True)
 
         self._stop_evt = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -83,7 +85,11 @@ class Detector:
     # -------------------------
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
-            return
+            if not self._stop_evt.is_set():
+                return
+            self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                return
         self._stop_evt.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -171,6 +177,10 @@ class Detector:
 
         while not self._stop_evt.is_set():
             try:
+                if not self._scan_allowed():
+                    self._armed = True
+                    self._stop_evt.wait(self.cfg.scan_interval_sec)
+                    continue
                 profile = self.get_profile()
                 roi_px = rel_to_px(profile.roi_rel, screen_w, screen_h)
                 roi_bgr = self._grab_roi(roi_px)
