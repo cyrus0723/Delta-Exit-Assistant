@@ -1,6 +1,8 @@
 # 🎮 Delta Exit Assistant —— 多游戏结算检测托盘助手（V2）
 
 一个用于**检测游戏结算画面**并提醒你“该下机了”的 Windows 托盘工具。  
+主窗口采用左侧导航，分为“开始”“提醒设置”“模板与识别”“高级设置”四页。开始页集中显示检测状态、当前游戏和提醒时机，默认窗口下一屏显示；较小窗口保留滚动以避免内容被遮挡。
+
 双击启动入口会打开主窗口；关闭窗口只会收起到托盘，不会停止检测。再次双击可唤起已有窗口。
 V2 版本已升级为 **多游戏 Profile 架构**：每个游戏独立 ROI 与模板组，可在托盘中切换游戏，且支持一键抓取模板与在线微调 ROI。
 
@@ -243,14 +245,14 @@ Windows 通知 + 提示音
 安装 Inno Setup 6 后，在 PowerShell 中运行：
 
 ```powershell
-.\scripts\build-installer.ps1 -Version 2.3.5
+.\scripts\build-installer.ps1 -Version 2.3.6
 ```
 
 生成文件：
 
-`release\\Delta-Exit-Assistant-Setup-2.3.5.exe`
+`release\\Delta-Exit-Assistant-Setup-2.3.6.exe`
 
-同时生成 `release\\Delta-Exit-Assistant-Portable-2.3.5.zip`。完整解压后，根目录的“启动助手.cmd”可直接启动；“创建桌面快捷方式.cmd”会询问是否创建桌面入口。根目录的 `readme.txt` 提供简易操作说明。安装版也会在安装目录创建启动快捷方式。
+同时生成 `release\\Delta-Exit-Assistant-Portable-2.3.6.zip`。完整解压后，根目录的“启动助手.cmd”可直接启动；“创建桌面快捷方式.cmd”会询问是否创建桌面入口。根目录的 `readme.txt` 提供简易操作说明。安装版也会在安装目录创建启动快捷方式。
 
 程序使用 Windows 命名互斥量防止重复启动：已有助手运行时，再次双击会直接退出新实例，现有托盘及检测继续工作。
 
