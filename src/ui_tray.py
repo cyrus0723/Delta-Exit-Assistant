@@ -734,6 +734,8 @@ class TrayApp:
 
     def run(self) -> None:
         self._main_window = MainWindow(self._dlg, self)
+        if self._cfg.get("auto_start_detection") is True:
+            self._action_start(self._icon, None)
         if self._instance:
             def watch_launches():
                 while True:

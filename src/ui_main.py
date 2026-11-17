@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageTk
 
 from alert_timer import parse_target_time, parse_countdown_hours
 from notify import VALID_NOTIFY_MODES
+import windows_startup
 
 
 class RoundedButton(tk.Canvas):
@@ -137,6 +138,16 @@ class MainWindow:
         self.toggle = RoundedButton(status_row, "开始检测", self._toggle_detection,
                                     primary=True, width=142)
         self.toggle.pack(side="right", padx=(12, 0))
+        self.auto_start = tk.BooleanVar(value=self.app._cfg.get("auto_start_detection") is True)
+        ttk.Checkbutton(hero, text="打开助手时自动开始检测", variable=self.auto_start,
+                        style="Startup.TCheckbutton", command=self._set_auto_start).pack(anchor="w", pady=(8, 0))
+        self.start_with_windows = tk.BooleanVar(value=False)
+        try:
+            self.start_with_windows.set(windows_startup.is_enabled())
+        except OSError:
+            pass
+        ttk.Checkbutton(hero, text="开机自启动", variable=self.start_with_windows,
+                        style="Startup.TCheckbutton", command=self._set_windows_startup).pack(anchor="w", pady=(4, 0))
         row = ttk.Frame(hero)
         row.pack(fill="x", pady=(14, 0))
         ttk.Label(row, text="当前游戏").pack(side="left", padx=(0, 12))
@@ -330,6 +341,24 @@ class MainWindow:
             style.map(name, fieldbackground=[("readonly", "white")], bordercolor=[("focus", "#0067c0")])
         style.configure("TRadiobutton", background="white", padding=(0, 4))
         style.map("TRadiobutton", background=[("active", "white")])
+        self._startup_check_images = []
+        for selected in (False, True):
+            image = Image.new("RGBA", (18, 18), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(image)
+            draw.rounded_rectangle((1, 1, 16, 16), radius=3,
+                                   fill="#0067c0" if selected else "white",
+                                   outline="#0067c0" if selected else "#8996a5", width=1)
+            if selected:
+                draw.line((4, 9, 7, 12, 13, 5), fill="white", width=2, joint="curve")
+            self._startup_check_images.append(ImageTk.PhotoImage(image, master=win))
+        style.element_create("Startup.indicator", "image", self._startup_check_images[0],
+                             ("selected", self._startup_check_images[1]), width=20, sticky="w")
+        style.layout("Startup.TCheckbutton", [("Checkbutton.padding", {"sticky": "nswe", "children": [
+            ("Startup.indicator", {"side": "left", "sticky": ""}),
+            ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
+                ("Checkbutton.label", {"sticky": "nswe"})]})]})])
+        style.configure("Startup.TCheckbutton", background="white", padding=(0, 2))
+        style.map("Startup.TCheckbutton", background=[("active", "white")])
         style.configure("Vertical.TScrollbar", background="#d5dce6", troughcolor="#f3f5f9", borderwidth=0, arrowsize=12)
 
     def _navigation_icon(self, parent, key):
@@ -568,6 +597,18 @@ class MainWindow:
             if self.timer.get() == "countdown" and not self._save_countdown():
                 return
         self._act(self.app._action_stop if self.app._detector.is_running() else self.app._action_start)
+
+    def _set_auto_start(self):
+        self.app._cfg["auto_start_detection"] = self.auto_start.get()
+        self.app._persist()
+
+    def _set_windows_startup(self):
+        enabled = self.start_with_windows.get()
+        try:
+            windows_startup.set_enabled(enabled)
+        except OSError as exc:
+            self.start_with_windows.set(not enabled)
+            self.dialogs.info("开机自启动设置失败", f"无法更新 Windows 启动项：{exc}")
 
     def _capture(self):
         if not self.app._profile.templates:
