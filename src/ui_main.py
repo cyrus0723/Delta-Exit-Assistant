@@ -8,6 +8,55 @@ from alert_timer import parse_target_time, parse_countdown_hours
 from notify import VALID_NOTIFY_MODES
 
 
+class RoundedButton(tk.Canvas):
+    """Keyboard-accessible canvas button with the same config surface used by status."""
+
+    def __init__(self, parent, text, command, primary=False, width=120):
+        super().__init__(parent, width=width, height=40, highlightthickness=0,
+                         bg="white", cursor="hand2", takefocus=True)
+        self._text = text
+        self._command = command
+        self._fill = "#0067c0" if primary else "#f0f4fa"
+        self._foreground = "white" if primary else "#275581"
+        self._hover = False
+        self.bind("<Configure>", self._draw)
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+        self.bind("<ButtonRelease-1>", lambda e: self.invoke() if 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height() else None)
+        self.bind("<Return>", lambda _e: self.invoke())
+        self.bind("<space>", lambda _e: self.invoke())
+        self.bind("<FocusIn>", self._draw)
+        self.bind("<FocusOut>", self._draw)
+
+    def _set_hover(self, value):
+        self._hover = value
+        self._draw()
+
+    def _draw(self, _event=None):
+        self.delete("all")
+        w, h, r = self.winfo_width(), self.winfo_height(), 12
+        self.create_polygon(r, 1, w-r, 1, w-1, 1, w-1, r, w-1, h-r,
+                            w-1, h-1, w-r, h-1, r, h-1, 1, h-1,
+                            1, h-r, 1, r, 1, 1, smooth=True, splinesteps=24,
+                            fill=self._fill, outline="#8bb7eb" if self._hover or self.focus_get() == self else self._fill)
+        self.create_text(w/2, h/2, text=self._text, fill=self._foreground,
+                         font=("Microsoft YaHei UI", 10, "bold"))
+
+    def config(self, **kwargs):
+        self._text = kwargs.pop("text", self._text)
+        self._fill = kwargs.pop("bg", self._fill)
+        kwargs.pop("activebackground", None)
+        if kwargs:
+            super().configure(**kwargs)
+        self._draw()
+
+    def cget(self, key):
+        return self._text if key == "text" else super().cget(key)
+
+    def invoke(self):
+        return self._command()
+
+
 class MainWindow:
     def __init__(self, dialogs, app):
         self.app = app
@@ -51,10 +100,10 @@ class MainWindow:
         tk.Label(sidebar, text="关闭窗口后继续在托盘运行", bg="#edf0f5", fg="#78828f",
                  font=("Microsoft YaHei UI", 8)).pack(side="bottom", pady=10)
 
-        main = ttk.Frame(win, style="Shell.TFrame", padding=(28, 26, 24, 14))
+        main = ttk.Frame(win, style="Shell.TFrame", padding=(28, 18, 24, 12))
         main.pack(side="left", fill="both", expand=True)
         header = ttk.Frame(main, style="Shell.TFrame")
-        header.pack(fill="x", pady=(0, 20))
+        header.pack(fill="x", pady=(0, 12))
         self.page_title = ttk.Label(header, style="Title.TLabel")
         self.page_title.pack(anchor="w")
         self.page_description = ttk.Label(header, style="Subtitle.TLabel")
@@ -79,10 +128,8 @@ class MainWindow:
         self.status_label.pack(anchor="w", pady=(0, 5))
         self.status_description = ttk.Label(status_text, style="Muted.TLabel", wraplength=380)
         self.status_description.pack(anchor="w")
-        self.toggle = tk.Button(status_row, command=self._toggle_detection,
-                                font=("Microsoft YaHei UI", 11, "bold"),
-                                fg="white", activeforeground="white", relief="flat",
-                                borderwidth=0, padx=30, pady=10, cursor="hand2")
+        self.toggle = RoundedButton(status_row, "开始检测", self._toggle_detection,
+                                    primary=True, width=142)
         self.toggle.pack(side="right", padx=(12, 0))
         row = ttk.Frame(hero)
         row.pack(fill="x", pady=(14, 0))
@@ -90,33 +137,33 @@ class MainWindow:
         self.game = ttk.Combobox(row, state="readonly", width=27)
         self.game.pack(side="left", fill="x", expand=True, padx=(0, 12))
         self.game.bind("<<ComboboxSelected>>", self._choose_game)
-        ttk.Button(row, text="新建游戏", style="Clear.TButton",
-                   command=lambda: self._act(self.app._action_new_game)).pack(side="right")
+        RoundedButton(row, "新建游戏", lambda: self._act(self.app._action_new_game), width=108).pack(side="right")
 
         timing = self._card(home, "提醒时机")
         self.timer = tk.StringVar()
+        self._timing_rows = {}
+        self.timer.trace_add("write", lambda *_args: self._highlight_timing())
         for label, value in (("每局结束时", "always"), ("玩到指定时间", "clock"), ("再玩", "countdown")):
-            row = ttk.Frame(timing)
+            row = ttk.Frame(timing, padding=(12, 5), style=f"{value}.TFrame")
             row.pack(fill="x", pady=3)
+            self._timing_rows[value] = row
             ttk.Radiobutton(row, text=label, variable=self.timer, value=value,
+                            style=f"{value}.TRadiobutton",
                             command=self._set_timer, width=16).pack(side="left")
             if value == "clock":
-                self.target = ttk.Entry(row, width=9)
-                self.target.pack(side="left", padx=(0, 10))
-                ttk.Button(row, text="应用时间", style="Clear.TButton", command=self._save_timer).pack(side="right")
+                self.target = self._time_stepper(row, "clock")
+                RoundedButton(row, "应用时间", self._save_timer, width=106).pack(side="right")
             elif value == "countdown":
-                self.countdown = ttk.Entry(row, width=9)
-                self.countdown.pack(side="left", padx=(0, 10))
+                self.countdown = self._time_stepper(row, "countdown")
                 ttk.Label(row, text="小时").pack(side="left")
-                ttk.Button(row, text="应用时长", style="Clear.TButton", command=self._save_countdown).pack(side="right")
+                RoundedButton(row, "应用时长", self._save_countdown, width=106).pack(side="right")
         row = ttk.Frame(timing)
         row.pack(fill="x", pady=(6, 4))
-        ttk.Label(row, text="预计单局", width=16).pack(side="left")
-        self.duration = ttk.Spinbox(row, from_=0, to=1440, width=9)
-        self.duration.pack(side="left", padx=(0, 10))
+        ttk.Label(row, text="预计单局", width=16, padding=(12, 0, 0, 0)).pack(side="left")
+        self.duration = self._time_stepper(row, "duration")
         ttk.Label(row, text="分钟").pack(side="left")
-        self.window_label = ttk.Label(timing, style="Muted.TLabel", wraplength=580)
-        self.window_label.pack(anchor="w", pady=(8, 2))
+        self.window_label = ttk.Label(timing, style="Plan.TLabel", padding=(12, 9), wraplength=550)
+        self.window_label.pack(fill="x", pady=(8, 2))
 
         modes = self._card(reminder, "提醒方式")
         self.mode = tk.StringVar()
@@ -126,18 +173,18 @@ class MainWindow:
         for index, (label, value) in enumerate((("应用弹窗 + 提示音", "popup"), ("Windows 通知 + 提示音", "native"),
                                               ("仅 Windows 通知", "native_silent"), ("只响铃", "sound"))):
             ttk.Radiobutton(mode_choices, text=label, value=value, variable=self.mode,
-                            command=self._set_mode).grid(row=index // 2, column=index % 2, sticky="w", pady=7)
+                            command=self._set_mode).grid(row=index // 2, column=index % 2, sticky="w", pady=4)
         text_card = self._card(reminder, "提醒文案")
         ttk.Label(text_card, text="标题").pack(anchor="w", pady=(0, 6))
         self.title_text = ttk.Entry(text_card)
-        self.title_text.pack(fill="x", pady=(0, 14))
+        self.title_text.pack(fill="x", pady=(0, 8))
         ttk.Label(text_card, text="正文").pack(anchor="w", pady=(0, 6))
         self.body_text = ttk.Entry(text_card)
-        self.body_text.pack(fill="x", pady=(0, 14))
+        self.body_text.pack(fill="x", pady=(0, 8))
         ttk.Button(text_card, text="保存文案", style="Clear.TButton", command=self._save_text).pack(anchor="w")
         sound_card = self._card(reminder, "提示音")
         self.sound = ttk.Label(sound_card, style="Muted.TLabel", wraplength=580)
-        self.sound.pack(anchor="w", pady=(0, 14))
+        self.sound.pack(anchor="w", pady=(0, 8))
         actions = ttk.Frame(sound_card)
         actions.pack(fill="x")
         for label, action in (("选择提示音", self.app._action_select_sound),
@@ -182,6 +229,70 @@ class MainWindow:
         self.refresh()
         self._show_page("home")
         win.deiconify()
+        self._poll_status()
+
+    def _highlight_timing(self):
+        style = ttk.Style(self.window)
+        selected = self.timer.get()
+        for value, row in self._timing_rows.items():
+            color = "#edf4fe" if value == selected else "white"
+            style.configure(f"{value}.TFrame", background=color)
+            style.configure(f"{value}.TRadiobutton", background=color)
+            style.map(f"{value}.TRadiobutton", background=[("active", color)])
+            for child in row.winfo_children():
+                if isinstance(child, ttk.Label):
+                    child.configure(background=color)
+                elif isinstance(child, RoundedButton):
+                    tk.Canvas.configure(child, bg=color)
+
+    def _time_stepper(self, parent, kind):
+        frame = ttk.Frame(parent)
+        frame.pack(side="left", padx=(0, 10))
+        entry = ttk.Entry(frame, width=7, justify="center", font=("Segoe UI", 12), style="Time.TEntry")
+        entry.pack(side="left", fill="y")
+        arrows = tk.Frame(frame, bg="#e9eff8")
+        arrows.pack(side="left", padx=(4, 0))
+
+        def step(direction):
+            current = entry.get()
+            if kind == "clock":
+                value = parse_target_time(current)
+                if value is None:
+                    self.dialogs.info("时间格式错误", "请输入有效的 24 小时时间，例如 23:00。")
+                    return
+                cursor = entry.index(tk.INSERT)
+                minutes = (value.hour * 60 + value.minute + direction * (60 if cursor <= 2 else 1)) % 1440
+                text = f"{minutes // 60:02d}:{minutes % 60:02d}"
+            elif kind == "countdown":
+                value = parse_countdown_hours(current)
+                if value is None:
+                    self.dialogs.info("时长无效", "请输入 0～24 小时。")
+                    return
+                text = f"{max(0.25, min(24, value + direction * 0.25)):g}"
+            else:
+                try:
+                    value = int(current)
+                except ValueError:
+                    self.dialogs.info("时长无效", "请输入 0～1440 分钟的预计单局时长。")
+                    return
+                text = str(max(0, min(1440, value + direction)))
+            entry.delete(0, "end")
+            entry.insert(0, text)
+            entry.focus_set()
+            if kind == "clock":
+                entry.icursor(cursor)
+
+        for symbol, direction in (("▴", 1), ("▾", -1)):
+            tk.Button(arrows, text=symbol, command=lambda d=direction: step(d),
+                      font=("Segoe UI", 8), bg="#e9eff8", fg="#0067c0",
+                      activebackground="#d7e5f7", relief="flat", bd=0,
+                      padx=8, pady=0, cursor="hand2", takefocus=False).pack()
+        def key_step(direction):
+            step(direction)
+            return "break"
+        entry.bind("<Up>", lambda _event: key_step(1))
+        entry.bind("<Down>", lambda _event: key_step(-1))
+        return entry
 
     def _setup_styles(self, win):
         style = ttk.Style(win)
@@ -193,11 +304,13 @@ class MainWindow:
         style.configure("Title.TLabel", background="#f3f5f9", font=("Microsoft YaHei UI", 24, "bold"))
         style.configure("Subtitle.TLabel", background="#f3f5f9", foreground="#697586")
         style.configure("Muted.TLabel", background="white", foreground="#697586")
+        style.configure("Plan.TLabel", background="#edf4fe", foreground="#31618f", font=("Microsoft YaHei UI", 9))
+        style.configure("Time.TEntry", padding=(8, 6), fieldbackground="white", bordercolor="#cfdaeb")
         style.configure("CardTitle.TLabel", font=("Microsoft YaHei UI", 11, "bold"))
-        style.configure("Clear.TButton", padding=(14, 8), background="#f8f9fb", bordercolor="#dce1e8", relief="flat")
+        style.configure("Clear.TButton", padding=(12, 6), background="#f8f9fb", bordercolor="#dce1e8", relief="flat")
         style.map("Clear.TButton", background=[("pressed", "#e2e8f0"), ("active", "#eef2f7")])
         for name in ("TEntry", "TCombobox", "TSpinbox"):
-            style.configure(name, padding=7, fieldbackground="white", bordercolor="#d5dce6", arrowcolor="#5b6675")
+            style.configure(name, padding=5, fieldbackground="white", bordercolor="#d5dce6", arrowcolor="#5b6675")
             style.map(name, fieldbackground=[("readonly", "white")], bordercolor=[("focus", "#0067c0")])
         style.configure("TRadiobutton", background="white", padding=(0, 4))
         style.map("TRadiobutton", background=[("active", "white")])
@@ -206,14 +319,14 @@ class MainWindow:
     def _card(self, parent, title):
         # A canvas border gives cards rounded corners without adding a UI dependency.
         canvas = tk.Canvas(parent, bg="#f3f5f9", highlightthickness=0, height=1)
-        canvas.pack(fill="x", pady=(0, 12))
-        content = ttk.Frame(canvas, padding=(16, 12, 16, 14))
+        canvas.pack(fill="x", pady=(0, 8))
+        content = ttk.Frame(canvas, padding=(16, 8, 16, 8))
         item = canvas.create_window(1, 1, window=content, anchor="nw")
         ttk.Label(content, text=title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
 
         def resize(_event=None):
             width = canvas.winfo_width()
-            inset = 12
+            inset = 10
             canvas.itemconfigure(item, width=max(1, width - inset * 2))
             canvas.coords(item, inset, inset)
             height = content.winfo_reqheight() + inset * 2
@@ -349,12 +462,7 @@ class MainWindow:
         self.app._persist()
         self.app._rebuild_menu()
 
-    def refresh(self):
-        if not self.window:
-            return
-        self.game["values"] = [p.display_name for p in self.app._profiles]
-        self.game.current(next((i for i, p in enumerate(self.app._profiles)
-                                if p.id == self.app._profile_base.id), 0))
+    def _refresh_status(self):
         running = self.app._detector.is_running()
         self.toggle.config(text="停止检测" if running else "开始检测",
                            bg="#c42b3a" if running else "#0067c0",
@@ -363,6 +471,21 @@ class MainWindow:
                                  foreground="#0067c0" if running else "#20252d")
         self.status_description.config(text="检测到结算画面后，将按设置提醒你。" if running
                                        else "选好游戏与提醒时机，即可开始检测。")
+
+    def _poll_status(self):
+        if not self.window.winfo_exists():
+            return
+        # Refresh only status, so background updates never replace an unfinished edit.
+        self._refresh_status()
+        self.window.after(500, self._poll_status)
+
+    def refresh(self):
+        if not self.window:
+            return
+        self.game["values"] = [p.display_name for p in self.app._profiles]
+        self.game.current(next((i for i, p in enumerate(self.app._profiles)
+                                if p.id == self.app._profile_base.id), 0))
+        self._refresh_status()
         self.timer.set(self.app._timer_mode)
         if self.window.focus_get() not in (self.target, self.duration, self.countdown):
             self.target.delete(0, "end")

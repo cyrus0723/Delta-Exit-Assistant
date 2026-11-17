@@ -90,22 +90,53 @@ class TkDialogService:
         win.title("下机提醒")
         win.attributes("-topmost", True)
         win.resizable(False, False)
-        win.configure(bg="#f8faf9")
-        win.geometry("480x330")
+        win.configure(bg="#f3f5f9")
+        win.geometry("540x390")
 
-        tk.Label(win, text=title, font=("Microsoft YaHei UI", 20, "bold"),
-                 bg="#f8faf9", fg="#172c2a", wraplength=430).pack(padx=24, pady=(25, 12))
-        body = tk.Text(win, font=("Microsoft YaHei UI", 13), bg="#f8faf9",
-                       fg="#344744", wrap="word", relief="flat", height=6,
-                       padx=8, pady=4)
+        header = tk.Frame(win, bg="#f3f5f9")
+        header.pack(fill="x", padx=28, pady=(22, 14))
+        tk.Label(header, text="◷", font=("Segoe UI", 24), bg="#f3f5f9",
+                 fg="#0067c0").pack(side="left", padx=(0, 12))
+        tk.Label(header, text="下机提醒", font=("Microsoft YaHei UI", 12, "bold"),
+                 bg="#f3f5f9", fg="#0067c0").pack(side="left")
+        canvas = tk.Canvas(win, bg="#f3f5f9", highlightthickness=0, height=150)
+        canvas.pack(fill="both", expand=True, padx=24)
+        card = tk.Frame(canvas, bg="white")
+        item = canvas.create_window(20, 20, window=card, anchor="nw")
+        def resize_card(event):
+            w, h = event.width, event.height
+            canvas.delete("card")
+            r = 28
+            canvas.create_polygon(r, 1, w-r, 1, w-1, 1, w-1, r,
+                                  w-1, h-r, w-1, h-1, w-r, h-1,
+                                  r, h-1, 1, h-1, 1, h-r, 1, r, 1, 1,
+                                  smooth=True, splinesteps=24, fill="white",
+                                  outline="#e1e6ed", tags="card")
+            canvas.tag_lower("card")
+            canvas.itemconfigure(item, width=max(1, w-40), height=max(1, h-40))
+        canvas.bind("<Configure>", resize_card)
+        tk.Label(card, text=title, font=("Microsoft YaHei UI", 20, "bold"),
+                 bg="white", fg="#20252d", wraplength=440, anchor="w",
+                 justify="left").pack(fill="x", pady=(0, 12))
+        body_frame = tk.Frame(card, bg="white")
+        body_frame.pack(fill="both", expand=True)
+        scrollbar = tk.Scrollbar(body_frame, width=10)
+        body = tk.Text(body_frame, font=("Microsoft YaHei UI", 13), bg="white",
+                       fg="#697586", wrap="word", relief="flat", height=3,
+                       highlightthickness=0, padx=0, pady=0,
+                       yscrollcommand=scrollbar.set)
+        scrollbar.configure(command=body.yview)
+        scrollbar.pack(side="right", fill="y")
+        body.pack(side="left", fill="both", expand=True)
         body.insert("1.0", msg)
         body.configure(state="disabled")
-        body.pack(padx=24, fill="both", expand=True)
         button = tk.Button(win, text="我已了解", command=win.destroy,
-                           font=("Microsoft YaHei UI", 14, "bold"),
-                           bg="#147d67", fg="white", activebackground="#0e624f",
-                           activeforeground="white", padx=28, pady=10)
-        button.pack(pady=(12, 20), ipadx=18)
+                           font=("Microsoft YaHei UI", 12, "bold"),
+                           bg="#0067c0", fg="white", activebackground="#005aab",
+                           activeforeground="white", relief="flat", bd=0,
+                           cursor="hand2", padx=28, pady=10)
+        button.pack(pady=(16, 22), ipadx=18)
+        win.bind("<Escape>", lambda _event: win.destroy())
         win.protocol("WM_DELETE_WINDOW", win.destroy)
         win.update_idletasks()
         if has_foreground:
@@ -114,7 +145,20 @@ class TkDialogService:
         else:
             x = (win.winfo_screenwidth() - win.winfo_width()) // 2
             y = (win.winfo_screenheight() - win.winfo_height()) // 2
-        win.geometry(f"+{x}+{y}")
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [("size", ctypes.c_ulong), ("monitor", Rect),
+                        ("work", Rect), ("flags", ctypes.c_ulong)]
+
+        user32.MonitorFromWindow.argtypes = (ctypes.c_void_p, ctypes.c_ulong)
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.GetMonitorInfoW.argtypes = (ctypes.c_void_p, ctypes.POINTER(MonitorInfo))
+        monitor = user32.MonitorFromWindow(foreground, 2)
+        info = MonitorInfo()
+        info.size = ctypes.sizeof(info)
+        if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            x = max(info.work.left, min(x, info.work.right - win.winfo_width()))
+            y = max(info.work.top, min(y, info.work.bottom - win.winfo_height()))
+        win.geometry(f"{x:+d}{y:+d}")
         win.lift()
         user32.SetWindowPos(win.winfo_id(), ctypes.c_void_p(-1), x, y, 0, 0, 0x0001 | 0x0040)
         win.focus_force()
