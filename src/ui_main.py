@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+import math
+
+from PIL import Image, ImageDraw, ImageTk
 
 from alert_timer import parse_target_time, parse_countdown_hours
 from notify import VALID_NOTIFY_MODES
@@ -75,6 +78,7 @@ class MainWindow:
         self._setup_styles(win)
         self._pages = {}
         self._nav_buttons = {}
+        self._nav_icons = {}
 
         sidebar = tk.Frame(win, bg="#edf0f5", width=204)
         sidebar.pack(side="left", fill="y")
@@ -85,12 +89,14 @@ class MainWindow:
                  bg="#edf0f5", fg="#20252d").pack(anchor="w", padx=24, pady=(2, 0))
         tk.Label(sidebar, text="DELTA EXIT ASSISTANT", font=("Segoe UI", 8),
                  bg="#edf0f5", fg="#78828f").pack(anchor="w", padx=25, pady=(5, 30))
-        for key, symbol, title in (("home", "⌂", "开始"), ("reminder", "♪", "提醒设置"),
-                                   ("templates", "▧", "模板与识别"), ("advanced", "⚙", "高级设置")):
-            button = tk.Button(sidebar, text=f"{symbol}    {title}", anchor="w",
+        for key, title in (("home", "开始"), ("reminder", "提醒设置"),
+                           ("templates", "模板与识别"), ("advanced", "高级设置")):
+            self._nav_icons[key] = self._navigation_icon(sidebar, key)
+            button = tk.Button(sidebar, text=f"  {title}", anchor="w",
+                               image=self._nav_icons[key], compound="left",
                                font=("Microsoft YaHei UI", 11), relief="flat", bd=0,
                                bg="#edf0f5", fg="#4f5966", activebackground="#dfe7f1",
-                               activeforeground="#005aab", padx=18, pady=12, cursor="hand2",
+                               activeforeground="#005aab", padx=14, pady=12, cursor="hand2",
                                command=lambda page=key: self._show_page(page))
             button.pack(fill="x", padx=12, pady=3)
             self._nav_buttons[key] = button
@@ -123,7 +129,7 @@ class MainWindow:
         status_row.pack(fill="x")
         status_text = ttk.Frame(status_row)
         status_text.pack(side="left", fill="x", expand=True)
-        self.status_label = ttk.Label(status_text, font=("Microsoft YaHei UI", 22, "bold"),
+        self.status_label = ttk.Label(status_text, font=("Microsoft YaHei UI", 20, "bold"),
                                       background="white", foreground="#20252d")
         self.status_label.pack(anchor="w", pady=(0, 5))
         self.status_description = ttk.Label(status_text, style="Muted.TLabel", wraplength=380)
@@ -138,6 +144,12 @@ class MainWindow:
         self.game.pack(side="left", fill="x", expand=True, padx=(0, 12))
         self.game.bind("<<ComboboxSelected>>", self._choose_game)
         RoundedButton(row, "新建游戏", lambda: self._act(self.app._action_new_game), width=108).pack(side="right")
+        row = ttk.Frame(hero)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Label(row, text="预计单局").pack(side="left", padx=(0, 12))
+        self.duration = self._time_stepper(row, "duration")
+        ttk.Label(row, text="分钟").pack(side="left")
+        RoundedButton(row, "应用时长", self._save_duration, width=108).pack(side="right")
 
         timing = self._card(home, "提醒时机")
         self.timer = tk.StringVar()
@@ -157,11 +169,7 @@ class MainWindow:
                 self.countdown = self._time_stepper(row, "countdown")
                 ttk.Label(row, text="小时").pack(side="left")
                 RoundedButton(row, "应用时长", self._save_countdown, width=106).pack(side="right")
-        row = ttk.Frame(timing)
-        row.pack(fill="x", pady=(6, 4))
-        ttk.Label(row, text="预计单局", width=16, padding=(12, 0, 0, 0)).pack(side="left")
-        self.duration = self._time_stepper(row, "duration")
-        ttk.Label(row, text="分钟").pack(side="left")
+            self._bind_timing_row(row, value)
         self.window_label = ttk.Label(timing, style="Plan.TLabel", padding=(12, 9), wraplength=550)
         self.window_label.pack(fill="x", pady=(8, 2))
 
@@ -174,14 +182,22 @@ class MainWindow:
                                               ("仅 Windows 通知", "native_silent"), ("只响铃", "sound"))):
             ttk.Radiobutton(mode_choices, text=label, value=value, variable=self.mode,
                             command=self._set_mode).grid(row=index // 2, column=index % 2, sticky="w", pady=4)
-        text_card = self._card(reminder, "提醒文案")
-        ttk.Label(text_card, text="标题").pack(anchor="w", pady=(0, 6))
-        self.title_text = ttk.Entry(text_card)
+        text_card = self._card(reminder, "提醒文案", help_command=self._show_text_help)
+        self._text_editor = ttk.Frame(text_card)
+        self._text_editor.pack(fill="x")
+        ttk.Label(self._text_editor, text="标题").pack(anchor="w", pady=(0, 6))
+        self.title_text = ttk.Entry(self._text_editor)
         self.title_text.pack(fill="x", pady=(0, 8))
-        ttk.Label(text_card, text="正文").pack(anchor="w", pady=(0, 6))
-        self.body_text = ttk.Entry(text_card)
+        ttk.Label(self._text_editor, text="正文").pack(anchor="w", pady=(0, 6))
+        self.body_text = ttk.Entry(self._text_editor)
         self.body_text.pack(fill="x", pady=(0, 8))
-        ttk.Button(text_card, text="保存文案", style="Clear.TButton", command=self._save_text).pack(anchor="w")
+        ttk.Button(self._text_editor, text="保存文案", style="Clear.TButton", command=self._save_text).pack(anchor="w")
+        self._text_help = None
+        self._text_help_button = text_card.help_button
+        win.bind("<Button-1>", self._dismiss_text_help, add="+")
+        win.bind("<Escape>", lambda _event: self._hide_text_help(), add="+")
+        win.bind("<FocusOut>", self._text_help_focus_out, add="+")
+        win.bind("<Configure>", self._text_help_window_changed, add="+")
         sound_card = self._card(reminder, "提示音")
         self.sound = ttk.Label(sound_card, style="Muted.TLabel", wraplength=580)
         self.sound.pack(anchor="w", pady=(0, 8))
@@ -248,7 +264,7 @@ class MainWindow:
     def _time_stepper(self, parent, kind):
         frame = ttk.Frame(parent)
         frame.pack(side="left", padx=(0, 10))
-        entry = ttk.Entry(frame, width=7, justify="center", font=("Segoe UI", 12), style="Time.TEntry")
+        entry = ttk.Entry(frame, width=7, justify="center", font=("Segoe UI", 11), style="Time.TEntry")
         entry.pack(side="left", fill="y")
         arrows = tk.Frame(frame, bg="#e9eff8")
         arrows.pack(side="left", padx=(4, 0))
@@ -316,13 +332,102 @@ class MainWindow:
         style.map("TRadiobutton", background=[("active", "white")])
         style.configure("Vertical.TScrollbar", background="#d5dce6", troughcolor="#f3f5f9", borderwidth=0, arrowsize=12)
 
-    def _card(self, parent, title):
+    def _navigation_icon(self, parent, key):
+        # Native buttons paint their own image reliably; avoid child-label overlays.
+        image = Image.new("RGBA", (88, 88))
+        draw = ImageDraw.Draw(image)
+        color = "#52677f"
+        if key == "home":
+            draw.line([(12, 41), (44, 13), (76, 41)], fill=color, width=6)
+            draw.line([(23, 36), (23, 73), (65, 73), (65, 36)], fill=color, width=6)
+            draw.line([(39, 73), (39, 51), (51, 51), (51, 73)], fill=color, width=5)
+        elif key == "reminder":
+            draw.line([(39, 62), (39, 23), (68, 16), (68, 55)], fill=color, width=6)
+            draw.ellipse((18, 56, 40, 73), fill=color)
+            draw.ellipse((47, 49, 69, 66), fill=color)
+        elif key == "templates":
+            draw.rounded_rectangle((14, 17, 74, 71), radius=7, outline=color, width=5)
+            draw.ellipse((25, 27, 36, 38), fill=color)
+            draw.line([(20, 64), (39, 45), (51, 56), (61, 43), (72, 56)], fill=color, width=5)
+        else:
+            draw.ellipse((23, 23, 65, 65), outline=color, width=6)
+            draw.ellipse((36, 36, 52, 52), outline=color, width=5)
+            for index in range(8):
+                angle = index * math.pi / 4
+                draw.line([(44 + math.cos(angle) * 22, 44 + math.sin(angle) * 22),
+                           (44 + math.cos(angle) * 32, 44 + math.sin(angle) * 32)],
+                          fill=color, width=7)
+        return ImageTk.PhotoImage(image.resize((22, 22), Image.Resampling.LANCZOS), master=parent)
+
+    def _hide_text_help(self):
+        popup = getattr(self, "_text_help", None)
+        if popup is not None:
+            popup.destroy()
+            self._text_help = None
+
+    def _dismiss_text_help(self, event):
+        popup = self._text_help
+        widget = event.widget
+        if popup is None or widget == self._text_help_button:
+            return
+        while widget is not None:
+            if widget == popup:
+                return
+            widget = getattr(widget, "master", None)
+        self._hide_text_help()
+
+    def _text_help_focus_out(self, _event):
+        def check_focus():
+            if self.window.winfo_exists() and self.window.focus_displayof() is None:
+                self._hide_text_help()
+        self.window.after_idle(check_focus)
+
+    def _text_help_window_changed(self, event):
+        if event.widget == self.window:
+            self._hide_text_help()
+
+    def _show_text_help(self):
+        if self._text_help is not None:
+            self._hide_text_help()
+            return
+        popup = tk.Frame(self.window, bg="white", highlightbackground="#b8c9de",
+                         highlightthickness=1, padx=12, pady=10)
+        self._text_help = popup
+        for text, bold in (
+                ("文案占位符", True),
+                ("{game}  游戏名称   ·   {label}  结算结果", False),
+                ("{time}  当前时间   ·   {id}  模板 ID", False),
+                ("{score}  匹配分数", False),
+                ("{score:.3f}  保留 3 位小数，如 0.923", False),
+                ("示例：{game}：{label}，现在是 {time}", False),
+                ("使用英文半角大括号；{{ 和 }} 显示大括号。格式写错时按原文显示。", False)):
+            tk.Label(popup, text=text, bg="white", fg="#275581" if bold else "#4f5966",
+                     font=("Microsoft YaHei UI", 10, "bold" if bold else "normal"),
+                     wraplength=320, justify="left", anchor="w").pack(anchor="w", pady=2)
+        popup.update_idletasks()
+        button = self._text_help_button
+        x = button.winfo_rootx() - self.window.winfo_rootx() + button.winfo_width() - popup.winfo_reqwidth()
+        y = button.winfo_rooty() - self.window.winfo_rooty() + button.winfo_height() + 5
+        x = max(8, min(x, self.window.winfo_width() - popup.winfo_reqwidth() - 8))
+        y = max(8, min(y, self.window.winfo_height() - popup.winfo_reqheight() - 8))
+        popup.place(x=x, y=y)
+        popup.lift()
+
+    def _card(self, parent, title, help_command=None):
         # A canvas border gives cards rounded corners without adding a UI dependency.
         canvas = tk.Canvas(parent, bg="#f3f5f9", highlightthickness=0, height=1)
         canvas.pack(fill="x", pady=(0, 8))
         content = ttk.Frame(canvas, padding=(16, 8, 16, 8))
         item = canvas.create_window(1, 1, window=content, anchor="nw")
-        ttk.Label(content, text=title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
+        header = ttk.Frame(content)
+        header.pack(fill="x", pady=(0, 10))
+        ttk.Label(header, text=title, style="CardTitle.TLabel").pack(side="left")
+        if help_command is not None:
+            content.help_button = tk.Button(header, text="?", command=help_command, font=("Segoe UI", 10, "bold"),
+                      bg="#edf4fe", fg="#31618f", activebackground="#dce9fa",
+                      relief="flat", bd=0, width=2, cursor="hand2",
+                      takefocus=True)
+            content.help_button.pack(side="right")
 
         def resize(_event=None):
             width = canvas.winfo_width()
@@ -343,6 +448,7 @@ class MainWindow:
         return content
 
     def _show_page(self, key):
+        self._hide_text_help()
         titles = {"home": ("开始", "安排好最后一局，剩下的交给提醒。"),
                   "reminder": ("提醒设置", "选择提醒方式，设置你喜欢的文案与提示音。"),
                   "templates": ("模板与识别", "管理结算画面模板，校准检测区域。"),
@@ -392,43 +498,63 @@ class MainWindow:
         self.app._action_select_profile(self.app._profiles[self.game.current()].id)(self.app._icon, None)
         self.refresh()
 
+    def _bind_timing_row(self, row, value):
+        # Bind empty space and labels without intercepting entry/button actions.
+        def select(_event):
+            self.timer.set(value)
+            self._set_timer()
+        for child in (row, *row.winfo_children()):
+            if isinstance(child, (ttk.Frame, ttk.Label)):
+                child.configure(cursor="hand2")
+                child.bind("<Button-1>", select, add="+")
+
     def _set_timer(self):
-        self.app._set_timer_mode(self.timer.get())
+        mode = self.timer.get()
+        if mode == "clock":
+            valid = self._save_timer()
+        elif mode == "countdown":
+            valid = self._save_countdown()
+        else:
+            self.app._set_timer_mode(mode)
+            valid = True
+        if not valid:
+            self.timer.set(self.app._timer_mode)
 
     def _save_countdown(self):
         hours = parse_countdown_hours(self.countdown.get())
+        if hours is None:
+            self.dialogs.info("时长无效", "请输入 0～24 小时。")
+            return False
+        self.app._countdown_hours = hours
+        self.app._set_timer_mode("countdown")
+        return True
+
+    def _save_duration(self):
         try:
             duration = int(self.duration.get())
         except ValueError:
             duration = -1
-        if hours is None or not 0 <= duration <= 1440:
-            self.dialogs.info("时长无效", "请输入 0～24 小时和 0～1440 分钟的预计单局时长。")
+        if not 0 <= duration <= 1440:
+            self.dialogs.info("时长无效", "请输入 0～1440 分钟的预计单局时长。")
             return False
-        self.app._countdown_hours = hours
         overrides = self.app._cfg.get("timer_game_durations")
         if not isinstance(overrides, dict):
             overrides = {}
             self.app._cfg["timer_game_durations"] = overrides
         overrides[self.app._profile_base.id] = duration
-        self.app._set_timer_mode("countdown")
+        self.app._persist()
+        self.app._rebuild_menu()
+        self.refresh()
         return True
 
     def _save_timer(self):
         target = parse_target_time(self.target.get())
-        try:
-            duration = int(self.duration.get())
-        except ValueError:
-            duration = -1
-        if target is None or not 0 <= duration <= 1440:
-            self.dialogs.info("时间格式错误", "请输入有效的 24 小时时间和 0～1440 分钟的单局时长。")
-            return
+        if target is None:
+            self.dialogs.info("时间格式错误", "请输入有效的 24 小时时间，例如 23:00。")
+            return False
         self.app._timer_target_time = target
-        overrides = self.app._cfg.get("timer_game_durations")
-        if not isinstance(overrides, dict):
-            overrides = {}
-            self.app._cfg["timer_game_durations"] = overrides
-        overrides[self.app._profile_base.id] = duration
         self.app._set_timer_mode("clock")
+        return True
 
     def _set_mode(self):
         if self.mode.get() in VALID_NOTIFY_MODES:
@@ -436,8 +562,10 @@ class MainWindow:
         self.refresh()
 
     def _toggle_detection(self):
-        if not self.app._detector.is_running() and self.timer.get() == "countdown":
-            if not self._save_countdown():
+        if not self.app._detector.is_running():
+            if self.timer.get() == "clock" and not self._save_timer():
+                return
+            if self.timer.get() == "countdown" and not self._save_countdown():
                 return
         self._act(self.app._action_stop if self.app._detector.is_running() else self.app._action_start)
 

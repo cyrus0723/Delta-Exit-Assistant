@@ -11,9 +11,53 @@ from detector import Detector, DetectorConfig
 from profiles import GameProfile, TemplateItem, normalize_profile_id
 from roi import RoiRel
 from ui_main import MainWindow
+from ui_tray import TrayApp
 
 
 class TimerTests(unittest.TestCase):
+    def test_start_clock_uses_current_input_and_real_alert_gate(self) -> None:
+        window = MainWindow.__new__(MainWindow)
+        window.app = Mock()
+        window.app._detector.is_running.return_value = False
+        window.app._timer_mode = "always"
+        window.app._timer_target_time = time(8)
+        window.app._game_duration_min.return_value = 30
+        window.app._set_timer_mode.side_effect = lambda mode: TrayApp._set_timer_mode(window.app, mode)
+        window.timer = Mock()
+        window.timer.get.return_value = "clock"
+        window.target = Mock()
+        window.target.get.return_value = "22:00"
+        window._act = Mock()
+
+        window._toggle_detection()
+
+        self.assertEqual(window.app._timer_target_time, time(22))
+        self.assertEqual(window.app._timer_mode, "clock")
+        self.assertTrue(window.app._timer_enabled)
+        window._act.assert_called_once_with(window.app._action_start)
+        for now, expected in ((datetime(2026, 11, 18, 21, 29), False),
+                              (datetime(2026, 11, 18, 21, 30), True),
+                              (datetime(2026, 11, 18, 22, 1), True)):
+            with patch("ui_tray.datetime") as clock:
+                clock.now.return_value = now
+                self.assertEqual(TrayApp._alerts_allowed_for_profile(window.app, Mock()), expected)
+
+    def test_invalid_clock_input_blocks_start_and_preserves_setting(self) -> None:
+        window = MainWindow.__new__(MainWindow)
+        window.app = Mock()
+        window.app._detector.is_running.return_value = False
+        window.app._timer_target_time = time(22)
+        window.timer = Mock()
+        window.timer.get.return_value = "clock"
+        window.target = Mock()
+        window.target.get.return_value = "25:00"
+        window.dialogs = Mock()
+        window._act = Mock()
+        window._toggle_detection()
+        self.assertEqual(window.app._timer_target_time, time(22))
+        window._act.assert_not_called()
+        window.app._set_timer_mode.assert_not_called()
+
     def test_apply_time_selects_clock_mode(self) -> None:
         window = Mock()
         window.target.get.return_value = "23:00"
@@ -24,8 +68,37 @@ class TimerTests(unittest.TestCase):
         MainWindow._save_timer(window)
 
         self.assertEqual(window.app._timer_target_time, time(23, 0))
-        self.assertEqual(window.app._cfg["timer_game_durations"], {"delta": 30})
+        self.assertEqual(window.app._cfg, {})
         window.app._set_timer_mode.assert_called_once_with("clock")
+
+    def test_apply_duration_preserves_mode_and_other_games(self) -> None:
+        window = Mock()
+        window.duration.get.return_value = "45"
+        window.app._profile_base.id = "delta"
+        window.app._cfg = {"timer_game_durations": {"valorant": 40}}
+
+        self.assertTrue(MainWindow._save_duration(window))
+
+        self.assertEqual(window.app._cfg["timer_game_durations"], {"delta": 45, "valorant": 40})
+        window.app._set_timer_mode.assert_not_called()
+        window.app._persist.assert_called_once()
+
+    def test_invalid_duration_is_not_saved(self) -> None:
+        for value in ("-1", "1441", "bad"):
+            window = Mock()
+            window.duration.get.return_value = value
+            self.assertFalse(MainWindow._save_duration(window))
+            window.app._persist.assert_not_called()
+            window.dialogs.info.assert_called_once()
+
+    def test_apply_countdown_does_not_save_unapplied_game_duration(self) -> None:
+        window = Mock()
+        window.countdown.get.return_value = "2.5"
+        window.app._cfg = {"timer_game_durations": {"delta": 30}}
+        self.assertTrue(MainWindow._save_countdown(window))
+        self.assertEqual(window.app._cfg["timer_game_durations"], {"delta": 30})
+        self.assertEqual(window.app._countdown_hours, 2.5)
+        window.app._set_timer_mode.assert_called_once_with("countdown")
 
     def test_invalid_time_does_not_change_mode(self) -> None:
         window = Mock()
